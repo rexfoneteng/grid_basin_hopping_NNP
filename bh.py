@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # _*_ coding: utf-8 _*_
 import os
-os.sys.path.insert(0, "/home/htphan/git_projects/bh_1")
+#os.sys.path.insert(0, "/home/htphan/git_projects/bh_1")
 from basin_hopping.basin_hopping_generator import BasinHoppingGenerator
 from basin_hopping.operation_type import OperationType
 
@@ -20,7 +20,7 @@ output_dir = "xyz_opt"
 os.makedirs(output_dir, exist_ok=True)
 
 # Define structures
-base_structures = file_list("/beegfs/hotpool/htphan/sugar/disaccharides/replace_and_rotate/bGal_14_aGlcNAc/find_structure_bh_ext/base_structure", keys=".lst", filter_type="file_list")
+base_structures = file_list("/beegfs/coldpool/htphan/sugar/disaccharides/replace_and_rotate/bGal_14_aGlcNAc/find_structure_bh_ext/base_structure", keys=".lst", filter_type="file_list")
 seed_structure = "/beegfs/coldpool/htphan/fragment/C_NAc/C_NAc.xyz"
 
 # NNP model parameters
@@ -125,7 +125,8 @@ bh_generator = BasinHoppingGenerator(
     optimize_params=optimize_params,
     output_xyz=output_xyz,
     max_rejected=1000,  # Stop after 50 consecutive rejections
-    operation_sequence=operation_sequence  # Using the custom operation sequence
+    operation_sequence=operation_sequence,  # Using the custom operation sequence
+    save_trj=True
 )
 
 # Customize the grid points for each operation
@@ -135,7 +136,7 @@ bh_generator.set_proton_grid(custom_proton_grid)  # Set custom proton grid
 
 # Run basin hopping with maximum steps
 print("Starting basin hopping with proton addition...")
-best_structure = bh_generator(n_steps=300)
+best_structure = bh_generator(n_steps=5)
 
 # Save statistics as JSON
 with open(f"{output_dir}/statistics.json", "w") as f:

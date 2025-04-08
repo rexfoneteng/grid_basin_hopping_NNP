@@ -13,6 +13,7 @@ from custom_interface import CustomInterface
 from rotational_matrix import rotation_matrix_numpy
 from ase.io import read
 import math
+import shutil
 
 from generators.base_generator import BaseGenerator
 from generators.flip_generator import FlipGenerator
@@ -51,7 +52,9 @@ class BasinHoppingGenerator(BaseGenerator):
                  optimize_params: Optional[Dict[str, Any]] = None,
                  output_xyz: str = "best_structure.xyz",
                  max_rejected: int = 50,
-                 operation_sequence: List[OperationType] = None):
+                 operation_sequence: List[OperationType] = None,
+                 save_trj: bool = False,
+                 trajectory_dir: str = "opt_trj"):
         """Initialize the basin hopping generator.
         
         Args:
@@ -79,6 +82,12 @@ class BasinHoppingGenerator(BaseGenerator):
         self.temperature = temperature
         self.max_rejected = max_rejected
         self.output_xyz = output_xyz
+
+        # Optimization trajectory saving
+        self.save_trj = save_trj
+        self.trajectory_dir = trajectory_dir
+        if self.save_trj and not os.path.exists(trajectory_dir):
+            os.makedirs(self.trajectory_dir, exist_ok=True)
         
         # Grid definitions for each operation
         self.flip_angles = [0, 120, 240]  # 3 grid points for rotation after flip (in degrees)
@@ -331,7 +340,7 @@ class BasinHoppingGenerator(BaseGenerator):
             #with open("./input.xyz", "a") as f:
             #    f.write(proposed_structure.to_xyz_str())  
             # Optimize the proposed structure
-            optimized_structure, optimized_energy = self._optimize_structure(proposed_structure)
+            optimized_structure, optimized_energy, trajectory_path = self._optimize_structure(proposed_structure)
             
             # Skip if optimization failed
             if optimized_structure is None:
@@ -440,7 +449,7 @@ class BasinHoppingGenerator(BaseGenerator):
         # Optimize the structure
         #with open("./input.xyz", "a") as f:
         #    f.write(structure.to_xyz_str())
-        optimized_structure, optimized_energy = self._optimize_structure(structure)
+        optimized_structure, optimized_energy, trajectory_path = self._optimize_structure(structure)
         
         if optimized_structure is None:
             logger.error("Initial structure optimization failed")
@@ -476,7 +485,7 @@ class BasinHoppingGenerator(BaseGenerator):
                 energy = self.energy_function(structure)
             else:
                 energy = random.random() * 100
-            return structure, energy
+            return structure, energy, None
             
         try:
             # Create a temporary directory for the optimization
@@ -510,13 +519,12 @@ class BasinHoppingGenerator(BaseGenerator):
                 ase_interface.optimize(**self.optimize_params)
                 
                 # Read optimized structure
-                opt_xyz = f"{tmpdirname}/optimization.xyz"
                 opt_traj = f"{tmpdirname}/optimization.traj"
-                if not os.path.exists(opt_xyz):
-                    logger.error(f"Optimization failed: output file not found at {opt_xyz}")
-                    return None, float('inf')
+                if not os.path.exists(opt_traj):
+                    logger.error(f"Optimization failed: output file not found at {opt_traj}")
+                    return None, float('inf'), None
 
-                opt_frame = read(opt_xyz)
+                opt_frame = read(opt_traj)
                 # The last frame is the optimized structure
                 optimized_structure = MolecularStructure.from_ase_atoms(opt_frame)
             
@@ -528,9 +536,14 @@ class BasinHoppingGenerator(BaseGenerator):
                 })
                 
                 # Get final energy
-                energy = read(opt_traj).get_potential_energy()
-            
-            return optimized_structure, energy
+                local_min_at = read(opt_traj)
+                energy = local_min_at.get_potential_energy() * eV_TO_Ha_conversion
+
+                saved_trajectory_path = None
+                if self.save_trj:
+                    saved_trajectory_path = self._traj2xyz(structure, opt_traj)
+
+            return optimized_structure, energy, saved_trajectory_path
             
         except Exception as e:
             logger.error(f"Error in structure optimization: {str(e)}", exc_info=True)
@@ -1060,7 +1073,6 @@ class BasinHoppingGenerator(BaseGenerator):
             
             # Add a comment line with the step, energy, and acceptance
             lines = xyz_str.strip().split("\n")
-            n_atoms = int(lines[0])
             
             # Replace the blank comment line with information
             grid_point = structure.metadata.get('grid_point', 'unknown')
@@ -1080,12 +1092,9 @@ class BasinHoppingGenerator(BaseGenerator):
                     proton_site = structure.metadata.get("site", "unknown")
                     operations_info.append(f"ProtonAt= {proton_site}")
                     operations_info.append(f"ProtonDesc= {proton_desc}")
-
-            # Convert energy to Hartree for consistency
-            eng_in_Ha = energy * eV_TO_Ha_conversion
             
             # Build comment line with all available information
-            comment_parts = [f"Step= {step}", f"eng= {eng_in_Ha:.6f}", f"Base= {base_file}", 
+            comment_parts = [f"Step= {step}", f"eng= {energy:.6f}", f"Base= {base_file}", 
                             f"GridPoint= {grid_point}"] + operations_info
             comment_line = " ".join(comment_parts)
             
@@ -1131,6 +1140,36 @@ class BasinHoppingGenerator(BaseGenerator):
                     description["proton_grid_idx"] = "invalid"
         
         return description
+
+    def _traj2xyz(self, structure: MolecularStructure, opt_traj: str):
+        """Store traj file"""
+        # grid-based naming scheme
+        grid_point = structure.metadata.get("grid_point", "unknown")
+        grid_point_str = "-".join(map(str, grid_point)) if isinstance(grid_point, tuple) else str(grid_point)
+        trajectory_file_name = f"grid_{grid_point_str}.xyz"
+        saved_trajectory_path = os.path.join(self.trajectory_dir, trajectory_file_name)
+
+        traj = read(opt_traj, index=":")
+        with open(saved_trajectory_path, "a") as f:
+            for snapshot in traj:
+                energy = snapshot.get_potential_energy() * eV_TO_Ha_conversion
+                forces = snapshot.get_forces() * eV_TO_Ha_conversion
+                snapshot.info.update({"eng": energy})
+
+                snapshot_structure = MolecularStructure.from_ase_atoms(snapshot, include_force=True)
+                snapshot_structure.set_forces(forces)
+
+                xyz_str = snapshot_structure.to_xyz_str(include_forces=True)
+                lines = xyz_str.strip().split("\n")
+                lines[1] = f"eng= {energy} Properties=species:S:1:pos:R:3:force:R:3"
+
+                xyz_str = "\n".join(lines) + "\n"
+
+                f.write(xyz_str)
+
+        #shutil.copy2(opt_traj, saved_trajectory_path)
+        logger.info(f"Saved trajectory file to {saved_trajectory_path}")
+        return saved_trajectory_path
     
     def get_best_structure(self) -> MolecularStructure:
         """Get the best structure found so far."""
@@ -1195,3 +1234,13 @@ class BasinHoppingGenerator(BaseGenerator):
     def set_operation_sequence(self, operation_sequence: List[OperationType]):
         """Set the operation sequence."""
         self.operation_sequence = operation_sequence
+
+    def set_save_trj(self, save_trj: bool):
+        """Enable or disable trajectory saving."""
+        self.save_trj = save_trj
+
+    def set_trajectory_dir(self, trajectory_dir: str):
+        """Set the directory where trajectory files will be saved."""
+        self.trajectory_dir = trajectory_dir
+        if self.save_trj and not os.path.exists(self.trajectory_dir):
+            os.makedirs(self.trajectory_dir, exist_ok=True)

@@ -5,12 +5,13 @@ from typing import List, Dict, Any, Tuple, Optional, Set, Union
 from generators.base_generator import BaseGenerator
 from core.molecular_structure import MolecularStructure
 from core.constants import DEFAULT_FLIP_PARAMS
+from utils.flatten import flatten_concatenation
 
 # Import needed functions from your original tools
-from xyz_tools import Xyz, turn
+from xyz_tools import Xyz, turn, molecule_stat
 from sugar_tools import sugar_stat
 from xyz_physical_geometry_tool_mod import is_physical_geometry
-from xyz_toolsx import flip  # Assuming this is where the flip function is
+from xyz_toolsx import flip
 
 logger = logging.getLogger(__name__)
 
@@ -127,26 +128,8 @@ class FlipGenerator(BaseGenerator):
         angle_idx = np.random.randint(0, len(self.angle_grid))
         return (base_idx, angle_idx)
 
-    def generate_variants_at_grid_point(self, grid_point: Tuple[int, int]) -> List[MolecularStructure]:
-        """Generate variants at a specific grid point.
-        
-        Args:
-            grid_point: Tuple of (base_structure_idx, angle_idx)
-            
-        Returns:
-            List of generated structures
-        """
-        base_idx, angle_idx = grid_point
-        self.current_base_structure = self.base_structures[base_idx]
-        base_structure = self._load_structure(self.current_base_structure)
-        
-        # Generate the variant at the specific angle
-        return self._generate_specific_variant(base_structure, self.angle_grid[angle_idx])
-
     def _find_proton(self, sugar, O_NAc_id) -> Set[int]:
         """Get the ID of H+."""
-        from molecule_stat import molecule_stat
-        from flatten_list import flatten_concatenation
 
         sugar_list = [s for s in sugar]  # Convert to list format if needed
         mol_stat = molecule_stat(sugar_list)
@@ -155,19 +138,21 @@ class FlipGenerator(BaseGenerator):
         proton_id = set(flatten_concatenation(ONAc_bond)).intersection(H_id)
         return proton_id
 
-    def _generate_specific_variant(self, structure: MolecularStructure, angle_val: float) -> List[MolecularStructure]:
-        """Generate a structure variant using a specific rotation angle.
+    def generate_grid(self, structure, flip_angle):
+        """
+        Generate a structure with a specific flip angle.
         
         Args:
             structure: Input molecular structure
-            angle_val: Specific rotation angle to use
+            flip_angle: Specific rotation angle to use (degrees)
             
         Returns:
-            List of generated structures (should contain at most one structure)
+            Flipped structure or None if generation failed
         """
         try:
             # Convert MolecularStructure to xyz list format
             current_frame = structure.to_xyz_list()
+            
             # Get sugar statistics
             sug_stat = sugar_stat(current_frame,
                                 find_O_on_C_ring=True,
@@ -199,7 +184,15 @@ class FlipGenerator(BaseGenerator):
                 # Assuming C_NH_CO_CHHH contains N-Acetyl group information
                 flip_group = sug_stat["C_NH_CO_CHHH"][0]
                 # Find proton ID if needed
-                proton_id = self._find_proton(current_frame, flip_group[4])
+                from molecule_stat import molecule_stat
+                from utils.flatten import flatten_concatenation
+                
+                sugar_list = [s for s in current_frame]
+                mol_stat = molecule_stat(sugar_list)
+                ONAc_bond = [ele for ele in mol_stat["mol_bond_pattern"][0] if ele[1] == flip_group[4]]
+                H_id = [idx for idx, ele in enumerate(sugar_list) if ele[0] == "H"]
+                proton_id = set(flatten_concatenation(ONAc_bond)).intersection(H_id)
+                
                 flip_group.extend(proton_id)
                 C_flip_atom = (C_id, flip_group[1])
             else:
@@ -208,35 +201,33 @@ class FlipGenerator(BaseGenerator):
             # Perform the flip
             flipped_xyz = flip(current_frame, CH_bond, C_flip_atom, CH_bond, flip_group)
             
-            # Rotate with the specified angle
             rotated_xyz = turn(flipped_xyz,
-                              rotate_atom_list=flip_group,
-                              rotate_bond=C_flip_atom,
-                              angle=angle_val)
+                             rotate_atom_list=flip_group,
+                             rotate_bond=C_flip_atom,
+                             angle=flip_angle)
             
             # Convert xyz_list to MolecularStructure obj
-            mol_structure = MolecularStructure.from_xyz_list(rotated_xyz)
-            mol_structure.metadata = {
+            flipped_structure = MolecularStructure.from_xyz_list(rotated_xyz)
+            flipped_structure.metadata = structure.metadata.copy() if structure.metadata else {}
+            flipped_structure.metadata.update({
                 "operation": "flip",
-                "base_structure": self.current_base_structure,
+                "base_structure": structure.metadata.get('source_file', ''),
                 "ring_id": ring_id,
                 "position": position,
-                "angle_val": angle_val
-            }
+                "angle_val": flip_angle
+            })
             
-            # Check if the structure is physically reasonable
+            # Check if physically reasonable
             if self.check_physical:
                 check_result = is_physical_geometry(rotated_xyz, **self.check_physical_kwargs)
-                if check_result == "normal":
-                    return [mol_structure]
-                else:
-                    return []
-            else:
-                return [mol_structure]
-                
+                if check_result != "normal":
+                    return None
+            
+            return flipped_structure
+            
         except Exception as e:
-            logger.error(f"Error in flip operation: {str(e)}", exc_info=True)
-            return []
+            logger.error(f"Error generating flipped structure: {str(e)}", exc_info=True)
+            return None
 
     def generate_variants(self, structure: MolecularStructure) -> List[MolecularStructure]:
         """Generate structure variants by flipping a functional group.

@@ -1,6 +1,17 @@
 from ase.units import eV, Hartree
 
 eV_TO_Ha_conversion = eV /  Hartree
+
+PHYSICAL_DICT = {
+    "CO_min_threshold": 1.2,
+    "CH_min_threshold": 0.88,
+    "OO_min_threshold": 1.62,
+    "OH_min_threshold": 0.85,
+    "NC_min_threshold": 1.20,
+    "NO_min_threshold": 1.62,
+    "NH_min_threshold": 0.73,
+    "HH_min_threshold": 0.66
+}
 # Atom symbol to atomic number mapping
 ATOMIC_NUMBER_MAP = {
     "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,

@@ -7,12 +7,13 @@ from functools import lru_cache
 from generators.base_generator import BaseGenerator
 from core.molecular_structure import MolecularStructure
 from core.constants import DEFAULT_ADD_PROTON_PARAMS
+from utils.flatten import flatten_concatenation
 
 from xyz_physical_geometry_tool_mod import is_physical_geometry
 from rotational_matrix import rotation_matrix_numpy
 from geometry_1 import unit_vector
 from geometry import angle
-from sugar_tools import sugar_stat
+from sugar_tools import Sugar, sugar_stat
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,6 @@ class ProtonGenerator(BaseGenerator):
         """
         # This is a placeholder - in a real implementation, you'd use your existing
         # code to load a structure from file and potentially select a specific frame
-        from sugar_tools import Sugar
 
         sug_obj = Sugar(structure_path)
         frame_id = np.random.randint(0, sug_obj.frame_num)
@@ -668,6 +668,239 @@ class ProtonGenerator(BaseGenerator):
         mol_structure.metadata.update(metadata)
 
         return mol_structure
+
+    def _calculate_proton_position(self, O_id, connecting_atoms, coor, angle, HO_len):
+        """
+        Calculate H+ position around O with specified parameters.
+        
+        Args:
+            O_id: Index of oxygen atom
+            connecting_atoms: List of indices of atoms connected to oxygen
+            coor: Array of coordinates
+            angle: Rotation angle (radians)
+            HO_len: O-H bond length (Angstroms)
+            
+        Returns:
+            Coordinates of the added proton or None on error
+        """
+        try:
+            # Vector between connecting atoms
+            c1_c2_vec = coor[connecting_atoms[1]] - coor[connecting_atoms[0]]
+            
+            # Get vector for rotation
+            oc1_vec = coor[connecting_atoms[0]] - coor[O_id]
+            oc2_vec = coor[connecting_atoms[1]] - coor[O_id]
+            
+            # Use average vector for better proton placement
+            avg_oc_vec = (oc1_vec + oc2_vec) / 2
+            
+            # Add H+ at the specified angle around the oxygen
+            rotated_vec = np.dot(rotation_matrix_numpy(c1_c2_vec, angle), avg_oc_vec)
+            proton_pos = coor[O_id] + unit_vector(rotated_vec) * HO_len
+            
+            return proton_pos
+            
+        except Exception as e:
+            logger.debug(f"Error calculating H+ position around O: {str(e)}")
+            return None
+
+    def generate_grid(self, structure, proton_grid_point):
+        """
+        Generate a structure with a specific proton added at a specific position.
+        
+        Args:
+            structure: Input molecular structure
+            proton_grid_point: Tuple of (atom_idx, angle_val, atom_type) defining protonation
+            
+        Returns:
+            Protonated structure or None if generation failed
+        """
+        try:
+            # Extract proton grid parameters
+            at_idx, angle_val, atom_type = proton_grid_point
+            
+            # Get structure info
+            info = self._get_structure_info(structure)
+            current_frame = info['frame']
+            coor = info['coor']
+
+            # Process structure info
+            O_chain = info.get("O_on_C_chain", [])
+            for I0, O_ring_id in enumerate(info["O_ring"]):
+                info["O_on_C_chain"][I0][4] = O_ring_id[0]
+
+            flatten_O_ring = flatten_concatenation(info.get("O_ring", []))
+            flatten_O_on_C_chain = flatten_concatenation(info.get("O_on_C_chain", []))
+            flattened_C_chain = flatten_concatenation(info.get("C_chain", []))
+            flattened_H_on_O = flatten_concatenation(info.get("H_on_O", []))
+            
+            # Handle different atom types
+            if atom_type == "OCH":  # hydroxyl O
+                try:
+                    pos_idx = flatten_O_on_C_chain.index(at_idx)
+                    c_idx = flattened_C_chain[pos_idx]
+                    h_idx = flattened_H_on_O[pos_idx]
+                except Exception as e:
+                    raise
+                
+                # Calculate vectors for the C-O and O-H bonds
+                CO_vec = coor[at_idx] - coor[c_idx]
+                OH_vec = coor[h_idx] - coor[at_idx]
+                
+                # Convert angle from degrees to radians
+                angle_rad = angle_val * (np.pi / 180)
+                
+                # Rotate the O-H vector around the C-O axis to get new proton position
+                rotated_OH_vec = np.dot(rotation_matrix_numpy(CO_vec, angle_rad), OH_vec)
+                proton_pos = coor[at_idx] + rotated_OH_vec
+                
+                atom_metadata = {
+                    "site": "hydroxyl_O",
+                    "pos_idx": pos_idx,
+                    "o_idx": at_idx
+                }
+                
+            elif atom_type == "OCC":  # ring O or glycosidic O
+                if at_idx in flatten_O_ring:
+                    # ring O, determine C1-C5 next
+                    ring_idx = flatten_O_ring.index(at_idx)
+                    neighbor_c1_idx = info["C_chain"][ring_idx][0] #C1
+                    neighbor_c2_idx = info["C_chain"][ring_idx][4] #C5
+                else:
+                    # glycosidic O
+                    neighbor_c1_pos = info["O_on_C_chain"][0].index(at_idx)
+                    neighbor_c2_pos = info["O_on_C_chain"][1].index(at_idx)
+                    neighbor_c1_idx = info["C_chain"][0][neighbor_c1_pos]
+                    neighbor_c2_idx = info["C_chain"][1][neighbor_c2_pos]
+                
+                # Convert angle from degrees to radians
+                angle_rad = angle_val * (np.pi / 180)
+                
+                # Calculate the proton position
+                proton_pos = self._calculate_proton_position(at_idx, [neighbor_c1_idx, neighbor_c2_idx], coor, angle_rad,
+                                                         self.params["proton_Oring_dist"])
+                
+                atom_metadata = {
+                    "site": "ring_O",
+                    "o_idx": at_idx
+                }
+                
+            elif atom_type == "OC":  # NAc O
+                # Check if NAc group exists
+                if 'C_NH_CO_CHHH' not in info or not info['C_NH_CO_CHHH']:
+                    logger.warning("No NAc groups found for protonation")
+                    return None
+                
+                # Get a random NAc group
+                nac_group = info["C_NH_CO_CHHH"][0]
+                             
+                # Extract atom indices from the NAc group
+                C_id, N_id, HN_id, CO_id, OC_id, C_methyl_id, H_methyl_1, H_methyl_2, H_methyl_3 = nac_group
+                
+                # Set up a spherical coordinates around O carbonyl
+                z_axis = unit_vector(coor[OC_id] - coor[CO_id])
+                
+                # Find the X-axis vector perpendicular to Z
+                temp_vec = coor[C_id] - coor[CO_id]
+                # Remove any component along z-axis to get the perpendicular vector
+                temp_vec -= np.dot(temp_vec, z_axis) * z_axis
+                
+                if np.linalg.norm(temp_vec) < 1e-6:
+                    # If temp_vec is too small, try another reference point
+                    temp_vec = coor[N_id] - coor[CO_id]
+                    temp_vec -= np.dot(temp_vec, z_axis) * z_axis
+                
+                x_axis = unit_vector(temp_vec)
+                # y-axis completes the right-handed coordinate system
+                y_axis = np.cross(z_axis, x_axis)
+                
+                # Define the theta angle (from z-axis)
+                theta = 0.37 * np.pi
+                
+                # Define 5 evenly distributed phi angles around z-axis (use angle_idx to choose one)
+                phi_values = [i * 2 * np.pi / 5 for i in range(5)]
+                phi_val = phi_values[int(angle_val) % 5]  # angle_val is the index of phi angle
+                
+                # Define r values
+                r = self.params["proton_Oring_dist"]
+                
+                # Convert spherical coordinates to Cartesian coordinates
+                x_local = r * math.sin(theta) * math.cos(phi_val)
+                y_local = r * math.sin(theta) * math.sin(phi_val)
+                z_local = r * math.cos(theta)
+                
+                # Transform to global coordinates
+                proton_vector = x_local * x_axis + y_local * y_axis + z_local * z_axis
+                proton_pos = coor[OC_id] + proton_vector
+                
+                atom_metadata = {
+                    "site": "NAc_O",
+                    "phi_idx": int(angle_val)
+                }
+                
+            elif atom_type == "N":  # NAc N
+                # Check if NAc group exists
+                if 'C_NH_CO_CHHH' not in info or not info['C_NH_CO_CHHH']:
+                    logger.warning("No NAc groups found for protonation")
+                    return None
+                
+                # Get a random NAc group
+                nac_group = info["C_NH_CO_CHHH"][0]
+                
+                # Extract atom indices from the NAc group
+                C_id, N_id, HN_id, CO_id, OC_id, C_methyl_id, H_methyl_1, H_methyl_2, H_methyl_3 = nac_group
+                
+                # Calculate vectors
+
+                C2CO_vec = coor[CO_id] - coor[C_id]
+                NH_vec = coor[HN_id] - coor[N_id]
+                
+                # Convert angle from degrees to radians
+                angle_rad = angle_val * (np.pi / 180)
+                
+                # Rotate NH vector around C2CO axis
+                rotated_NH_vec = np.dot(rotation_matrix_numpy(C2CO_vec, angle_rad), NH_vec)
+                proton_pos = coor[N_id] + rotated_NH_vec
+                
+                atom_metadata = {
+                    "site": "NAc_N"
+                }
+                
+            else:
+                logger.warning(f"Invalid atom_type: {atom_type}")
+                return None
+            
+            if proton_pos is None:
+                logger.warning(f"Failed to calculate proton position for atom_type {atom_type}, angle {angle_val}")
+                return None
+                
+            # Create the protonated structure
+            # Add the proton to the structure
+            proton_coor = ("H", *proton_pos)
+            protonated_frame = current_frame.copy() + [proton_coor]
+            
+            # Check if physically reasonable
+            if self.check_physical:
+                check_result = is_physical_geometry(protonated_frame, **self.check_physical_kwargs)
+                if check_result != "normal":
+                    logger.debug(f"Generated protonated structure is not physically reasonable")
+                    return None
+            
+            # Convert to MolecularStructure
+            mol_structure = MolecularStructure.from_xyz_list(protonated_frame)
+            mol_structure.metadata = structure.metadata.copy() if structure.metadata else {}
+            mol_structure.metadata.update({
+                "operation": "add_proton",
+                "proton_description": "none",
+                "angle_val": angle_val,
+                **atom_metadata
+            })
+            
+            return mol_structure
+            
+        except Exception as e:
+            logger.error(f"Error generating protonated structure: {str(e)}", exc_info=True)
+            return None
 
     def set_current_base_structure(self, structure_path: str):
         """Set the current base structure."""

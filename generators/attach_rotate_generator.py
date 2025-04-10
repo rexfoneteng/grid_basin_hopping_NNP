@@ -1,5 +1,3 @@
-"""Generator for attaching and rotating structures."""
-
 import numpy as np
 import logging
 from typing import List, Dict, Any, Tuple, Optional, Set
@@ -8,7 +6,6 @@ from generators.base_generator import BaseGenerator
 from core.molecular_structure import MolecularStructure
 from core.constants import DEFAULT_ATTACH_ROTATE_PARAMS
 
-# Import needed functions from your original tools
 from xyz_tools import Xyz, attach, turn
 from xyz_physical_geometry_tool_mod import is_physical_geometry
 
@@ -67,6 +64,61 @@ class AttachRotateGenerator(BaseGenerator):
     def set_params(self, **kwargs):
         """Update parameters for the attach-rotate operation."""
         self.params.update(kwargs)
+
+    def generate_grid(self, structure, attach_angle, seed_structure=None):
+        """
+        Generate a structure with a specific attach rotation angle.
+        
+        Args:
+            structure: Input molecular structure
+            attach_angle: Specific rotation angle to use (degrees)
+            seed_structure: Path to seed structure file (optional)
+            
+        Returns:
+            Attached structure or None if generation failed
+        """
+        try:
+            base_frame = structure.to_xyz_list()
+            
+            # Load seed structure
+            seed_path = seed_structure if seed_structure else self.seed_structures[0]
+            seed_xyz_obj = Xyz(seed_path)
+            seed_frame = seed_xyz_obj.next()
+
+            # Attach the structures
+            attached = attach(base_frame, seed_xyz_list=seed_frame, **self.params["attach_kwargs"])
+
+            # Get atom counts for rotation
+            n_atom = len(base_frame)
+            n_atom_1 = len(seed_frame)
+
+            # Set up rotation parameters
+            rot_bond = self.params["rotate_bond_list"][0]
+            rot_atoms = set(list(rot_bond) + list(range(n_atom-1, n_atom+n_atom_1-3)))
+
+            # Rotate with the specified angle
+            rotated = turn(attached, rotate_bond=rot_bond, rotate_atom_list=rot_atoms, angle=attach_angle)
+            
+            # Convert to MolecularStructure
+            attached_structure = MolecularStructure.from_xyz_list(rotated)
+            attached_structure.metadata = structure.metadata.copy() if structure.metadata else {}
+            attached_structure.metadata.update({
+                "operation": "attach_rotate",
+                "seed_structure": seed_path,
+                "rot_angle": attach_angle
+            })
+            
+            # Check if physically reasonable
+            if self.check_physical:
+                check_result = is_physical_geometry(rotated, **self.check_physical_kwargs)
+                if check_result != "normal":
+                    return None
+                    
+            return attached_structure
+            
+        except Exception as e:
+            logger.error(f"Error generating attached structure: {str(e)}", exc_info=True)
+            return None
 
     def generate_variants(self, structure: MolecularStructure) -> MolecularStructure:
         """Generate a new structure by flipping a functional group in an existing structure.

@@ -1,193 +1,199 @@
 #!/usr/bin/env python3
-# _*_ coding: utf-8 _*_
+"""
+Basin Hopping - Structure Optimization with Neural Network Potentials
+"""
 import os
-#os.sys.path.insert(0, "/home/htphan/git_projects/bh_1")
-from basin_hopping.basin_hopping_generator import BasinHoppingGenerator
-from basin_hopping.operation_type import OperationType
-
+import sys
+import argparse
 import logging
-import json
-from os_tools import file_list
+
+from basin_hopping.basin_hopping_generator import BasinHoppingGenerator
+from utils.logging_utils import setup_logger
+from utils.config_utils import load_config, merge_cli_with_config, validate_config
+from utils.basin_hopping_utils import prepare_basin_hopping, save_results
 
 
-# Setup logging
-logging.basicConfig(level=logging.INFO,
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                   filename='basin_hopping_proton.log')
+def parse_arguments():
+    """Parse command-line arguments for basin hopping."""
+    parser = argparse.ArgumentParser(
+        description="Basin Hopping Optimization with Neural Network Potentials",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument(
+        "--config", "-c",
+        help="Path to YAML configuration file"
+    )
+    
+    parser.add_argument(
+        "--output-dir", "-o",
+        help="Directory for output files"
+    )
+    
+    parser.add_argument(
+        "--base-structures", "-b",
+        nargs="+",
+        help="List of base structure XYZ files"
+    )
+    
+    parser.add_argument(
+        "--seed-structure", "-s",
+        help="Seed structure XYZ file for attachment operations"
+    )
+    
+    parser.add_argument(
+        "--operations",
+        nargs="+",
+        choices=["flip", "attach_rotate", "add_proton"],
+        help="List of operations to perform in sequence"
+    )
+    
+    parser.add_argument(
+        "--temperature", "-t",
+        type=float,
+        help="Temperature for Metropolis criterion (K)"
+    )
+    
+    parser.add_argument(
+        "--steps", "-n",
+        type=int,
+        help="Number of basin hopping steps to perform"
+    )
+    
+    parser.add_argument(
+        "--max-rejected",
+        type=int,
+        help="Maximum consecutive rejected moves before stopping"
+    )
+    
+    parser.add_argument(
+        "--model-state",
+        help="Path to NNP model state dictionary"
+    )
+    
+    parser.add_argument(
+        "--prop-stats",
+        help="Path to property statistics file for NNP model"
+    )
+    
+    parser.add_argument(
+        "--device",
+        choices=["cpu", "cuda"],
+        help="Device to run NNP model on"
+    )
+    
+    parser.add_argument(
+        "--save-trajectories",
+        action="store_true",
+        help="Save optimization trajectories"
+    )
+    
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging level"
+    )
 
-# Define paths
-output_dir = "xyz_opt"
-os.makedirs(output_dir, exist_ok=True)
+    parser.add_argument(
+        "--export-config",
+        help="Export default configuration to specified YAML file and exit"
+    )
+    
+    return parser.parse_args()
 
-# Define structures
-base_structures = file_list("/beegfs/coldpool/htphan/sugar/disaccharides/replace_and_rotate/bGal_14_aGlcNAc/find_structure_bh_ext/base_structure", keys=".lst", filter_type="file_list")
-seed_structure = "/beegfs/coldpool/htphan/fragment/C_NAc/C_NAc.xyz"
+def run_basin_hopping(config):
+    """
+    Run basin hopping with the provided configuration.
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    # Prepare parameters
+    params = prepare_basin_hopping(config)
 
-# NNP model parameters
-model_params = {
-    "state_dict": "/beegfs/coldpool/htphan/sugar_4/schnetpack_proj/force_pred/m062x_6-311_gpd/find_structure_di/10_add_ext_H_position/01_add_bGal_14_bGlcNAc/cl_learning_lr_5e-4_resume/best_model",
-    "prop_stats": "/beegfs/coldpool/htphan/sugar_4/schnetpack_proj/force_pred/m062x_6-311_gpd/property_stats/property_stats_atomrefs_all.pt",
-    "device": "cpu",
-    "in_module": {
-        "n_atom_basis": 128,
-        "n_filters": 128,
-        "n_gaussians": 75,
-        "charged_systems": True,
-        "n_interactions": 4,
-        "cutoff": 15.0
-    },
-    "interface_params": {
-        "energy": "energy",
-        "forces": "force",
-        "energy_units": "Hartree",
-        "forces_units": "Hartree/Angstrom"
-    }
-}
+    try:
+        logger.info("Initializing basin hopping generator...")
+        bh_generator = BasinHoppingGenerator(
+            base_structures=config['base_structures'],
+            seed_structure=config['seed_structure'],
+            temperature=config['temperature'],
+            check_physical=params['physical_check']['enabled'],
+            check_physical_kwargs=params['physical_check']['params'],
+            model_params=params['model_params'],
+            optimize_params=params['optimize_params'],
+            accepted_xyz=params['accepted_xyz'],
+            rejected_xyz=params['rejected_xyz'],
+            max_rejected=config['max_rejected'],
+            operation_sequence=params['operation_sequence'],
+            save_trj=config['save_trajectories'],
+            trajectory_dir=params['trajectories_dir']
+        )
 
-# Optimization parameters
-optimize_params = {
-    "fmax": 4e-3,
-    "steps": 1000
-}
+        if params["flip_grid"]:
+            bh_generator.set_flip_angles(params["flip_grid"])
+            logger.info(f"Configured {len(params['flip_grid'])} flip grid points")
 
-# Output XYZ file where all local minima will be appended
-output_xyz = f"{output_dir}/best_structure.xyz"
+        if params["attach_rotate_grid"]:
+            bh_generator.set_attach_angles(params["attach_rotate_grid"])
+            logger.info(f"Configured {len(params['attach_rotate_grid'])} attach-rotate grid points")
 
-# Physical geometry check parameters
-PHYSICAL_DICT = {
-    "CO_min_threshold": 1.2,
-    "CH_min_threshold": 0.88,
-    "OO_min_threshold": 1.62,
-    "OH_min_threshold": 0.85,
-    "NC_min_threshold": 1.20,
-    "NO_min_threshold": 1.62,
-    "NH_min_threshold": 0.73,
-    "HH_min_threshold": 0.66
-}
+        if params["proton_grid"]:
+            params["proton_grid"] = [tuple(ele) for ele in params["proton_grid"]]
+            bh_generator.set_proton_grid(params["proton_grid"])
+            logger.info(f"Configured {len(params['proton_grid'])} proton grid points")
 
-# Define the operation sequence including ADD_PROTON
-operation_sequence = [
-    OperationType.FLIP,
-    OperationType.ATTACH_ROTATE,
-    OperationType.ADD_PROTON
-]
+        # Run basin hopping
+        logger.info(f"Starting basin hopping with {config['steps']} steps...")
+        best_structure = bh_generator(n_steps=config['steps'])
 
-custom_proton_grid = [
-            (16, -130, "OCC"), # atom_index, angle in degree, atom type
-            (16, 130, "OCC"),
+        # Save results
+        save_results(params["stats_file"], bh_generator.get_stats(),
+                     bh_generator.best_energy, params["accepted_xyz"])
 
-            (0, -130, "OCC"),
-            (0, 130, "OCC"),
+        return 0
 
-            (21, -120, "OCH"),
-            (21, 120, "OCH"),
+    except Exception as e:
+        logger.exception(f"Error during basin hopping: {e}")
+        return 1
 
-            (19, -120, "OCH"),
-            (19, 120, "OCH"),
+def main():
+    """Main entry point for the basin hopping CLI."""
+    global logger
 
-            (17, -120, "OCH"),
-            (17, 120, "OCH"),
+    # Parse args
+    args = parse_arguments()
 
-            (14, -120, "OCH"),
-            (14, 120, "OCH"),
+    # Handle config export if requested
+    if args.export_config:
+        # Setup basic logging for the export operation
+        logger = setup_logger(name="basin_hopping", level="INFO")
+        from utils.config_utils import export_default_config
+        success = export_default_config(args.export_config)
+        return 0 if success else 1
 
-            (39, -130, "OCC"),
-            (39, 130, "OCC"),
+    #Load config
+    config = load_config(args.config)
 
-            (24, -120, "OCH"),
-            (24, 120, "OCH"),
+    # Merge with CLI args
+    config = merge_cli_with_config(args, config)
 
-            (43, -67.5, "N"),
-            (43, 67.5, "N"),
+    # Setup logging
+    log_file = config.get("logging", {}).get("file")
+    log_level = config.get("logging", {}).get("level", "INFO")
+    logger = setup_logger(name="basin_hopping", level=log_level, 
+                          log_file=log_file)
 
-            (50, 0, "OC"),
-            (50, 60, "OC"),
-            (50, 120, "OC"),
-            (50, 180, "OC"),
-            (50, 240, "OC"),
-            (50, 300, "OC"),
+    # Validate config
+    if not validate_config(config):
+        logger.error("Config validation failed")
+        return 1
 
-            (40, -120, "OCH"),
-            (40, 120, "OCH"),
+    # Run  basin hopping
+    return run_basin_hopping(config)
 
-            (37, -120, "OCH"),
-            (37, 120, "OCH")
-]
 
-# Create basin hopping generator with the specified operation sequence
-bh_generator = BasinHoppingGenerator(
-    base_structures=base_structures,
-    seed_structure=seed_structure,
-    temperature=99999999.9,
-    check_physical=True,
-    check_physical_kwargs=PHYSICAL_DICT,
-    model_params=model_params,
-    optimize_params=optimize_params,
-    output_xyz=output_xyz,
-    max_rejected=1000,  # Stop after 50 consecutive rejections
-    operation_sequence=operation_sequence,  # Using the custom operation sequence
-    save_trj=True
-)
-
-# Customize the grid points for each operation
-bh_generator.set_flip_angles([0, 120, 240])  # 3 grid points for rotation after flip
-bh_generator.set_attach_angles([0, 60, 120, 180, 240, 300])  # 6 grid points for rotation after attach
-bh_generator.set_proton_grid(custom_proton_grid)  # Set custom proton grid
-
-# Run basin hopping with maximum steps
-print("Starting basin hopping with proton addition...")
-best_structure = bh_generator(n_steps=5)
-
-# Save statistics as JSON
-with open(f"{output_dir}/statistics.json", "w") as f:
-    json.dump(bh_generator.get_stats(), f, indent=2)
-
-# Print summary
-print(f"Basin hopping completed: {bh_generator.stats['stopping_reason']}")
-print(f"Best energy found: {bh_generator.best_energy:.6f}")
-print(f"Total steps: {bh_generator.stats['total_steps']}")
-print(f"Accepted steps: {bh_generator.stats['accepted_steps']}")
-print(f"Rejected steps: {bh_generator.stats['rejected_steps']}")
-print(f"Maximum consecutive rejections: {bh_generator.stats['max_consecutive_rejections']}")
-print(f"Duration: {bh_generator.stats['duration']:.2f} seconds")
-print(f"All structures have been saved to: {output_xyz}")
-
-# Print grid point statistics from accepted moves
-grid_counts = {}
-for entry in bh_generator.history:
-    grid_point = entry['grid_point']
-    if grid_point in grid_counts:
-        grid_counts[grid_point] += 1
-    else:
-        grid_counts[grid_point] = 1
-
-# Count operations
-operation_counts = {op.name: 0 for op in operation_sequence}
-for op in operation_sequence:
-    for entry in bh_generator.history:
-        op_desc = entry.get('operations', {})
-        if op == OperationType.FLIP and 'flip_angle' in op_desc:
-            operation_counts[op.name] += 1
-        elif op == OperationType.ATTACH_ROTATE and 'attach_angle' in op_desc:
-            operation_counts[op.name] += 1
-        elif op == OperationType.ADD_PROTON and 'proton_description' in op_desc:
-            operation_counts[op.name] += 1
-
-# Calculate proton site distribution
-proton_site_counts = {}
-for entry in bh_generator.history:
-    op_desc = entry.get('operations', {})
-    if 'proton_description' in op_desc:
-        proton_desc = op_desc['proton_description']
-        if proton_desc in proton_site_counts:
-            proton_site_counts[proton_desc] += 1
-        else:
-            proton_site_counts[proton_desc] = 1
-
-print("\nOperation statistics from accepted moves:")
-for op, count in operation_counts.items():
-    print(f"{op}: {count}")
-
-print("\nProton site distribution:")
-for site, count in sorted(proton_site_counts.items(), key=lambda x: x[1], reverse=True):
-    print(f"{site}: {count}")
+if __name__ == "__main__":
+    sys.exit(main())

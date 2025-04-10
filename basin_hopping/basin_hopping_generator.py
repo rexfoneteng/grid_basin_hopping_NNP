@@ -23,6 +23,7 @@ from core.molecular_structure import MolecularStructure
 from core.constants import DEFAULT_FLIP_PARAMS, DEFAULT_ATTACH_ROTATE_PARAMS, DEFAULT_ADD_PROTON_PARAMS, eV_TO_Ha_conversion
 from basin_hopping.operation_type import OperationType
 from utils.flatten import flatten_concatenation
+from models.nnp_model import NNPModelLoader
 
 from rotational_matrix import rotation_matrix_numpy
 from geometry_1 import unit_vector
@@ -50,7 +51,8 @@ class BasinHoppingGenerator(BaseGenerator):
                  check_physical_kwargs: Optional[Dict[str, Any]] = None,
                  model_params: Optional[Dict[str, Any]] = None,
                  optimize_params: Optional[Dict[str, Any]] = None,
-                 output_xyz: str = "best_structure.xyz",
+                 accepted_xyz: str = "accepted_structure.xyz",
+                 rejected_xyz: str = "rejected_structure.xyz",
                  max_rejected: int = 50,
                  operation_sequence: List[OperationType] = None,
                  save_trj: bool = False,
@@ -65,7 +67,7 @@ class BasinHoppingGenerator(BaseGenerator):
             check_physical_kwargs: Additional kwargs for physical geometry check
             model_params: Parameters for the NNP model
             optimize_params: Parameters for the optimization
-            output_xyz: Path to the output XYZ file where all local minima will be appended
+            accepted_xyz: Path to the output XYZ file where all local minima will be appended
             max_rejected: Maximum number of consecutive rejected moves before stopping
             operation_sequence: Sequence of operations to apply (default: FLIP, ATTACH_ROTATE)
         """
@@ -81,7 +83,8 @@ class BasinHoppingGenerator(BaseGenerator):
         self.seed_structure = seed_structure
         self.temperature = temperature
         self.max_rejected = max_rejected
-        self.output_xyz = output_xyz
+        self.accepted_xyz = accepted_xyz
+        self.rejected_xyz = rejected_xyz
 
         # Optimization trajectory saving
         self.save_trj = save_trj
@@ -228,72 +231,15 @@ class BasinHoppingGenerator(BaseGenerator):
         }
         
         # Initialize the output XYZ file
-        with open(self.output_xyz, 'w') as f:
+        with open(self.accepted_xyz, 'w') as f:
             f.write("")  # Create an empty file
         
     def _load_nnp_model(self):
         """Load the Neural Network Potential model."""
         try:
-            # Get model parameters
-            state_dict_path = self.model_params.get("state_dict")
-            prop_stats_path = self.model_params.get("prop_stats")
-            device = self.model_params.get("device", "cpu")
-            
-            if not state_dict_path or not os.path.exists(state_dict_path):
-                logger.error(f"Model state_dict file not found: {state_dict_path}")
-                return
-            
-            # Load model
-            state_dict_basename = os.path.basename(state_dict_path)
-            
-            if state_dict_basename.endswith(".pth.tar"):
-                # Load property statistics
-                if not prop_stats_path or not os.path.exists(prop_stats_path):
-                    logger.error(f"Property stats file not found: {prop_stats_path}")
-                    return
-                
-                prop_stats = torch.load(prop_stats_path)
-                means, stddevs = prop_stats["means"], prop_stats["stddevs"]
-                
-                # Define SchNet model
-                in_module_params = self.model_params.get("in_module", {
-                    "n_atom_basis": 128,
-                    "n_filters": 128,
-                    "n_gaussians": 15,
-                    "charged_systems": True,
-                    "n_interactions": 4,
-                    "cutoff": 15.0
-                })
-                
-                in_module = spk.representation.SchNet(**in_module_params)
-                
-                out_module = spk.atomistic.Atomwise(
-                    n_in=in_module.n_atom_basis,
-                    property="energy",
-                    mean=means["energy"],
-                    stddev=stddevs["energy"],
-                    derivative="force",
-                    negative_dr=True
-                )
-                
-                self.nnp_model = spk.AtomisticModel(
-                    representation=in_module,
-                    output_modules=out_module
-                )
-                
-                # Load state dictionary
-                state_dict = torch.load(state_dict_path, map_location=device)
-                self.nnp_model.load_state_dict(state_dict["model"])
-                
-            elif state_dict_basename == "best_model":
-                self.nnp_model = torch.load(state_dict_path, map_location=device)
-                
-            else:
-                raise ValueError(f"Unknown model format: {state_dict_basename}")
-                
-            # Set model to evaluation mode
-            self.nnp_model.eval()
-            logger.info("NNP model loaded successfully")
+            self.nnp_model = NNPModelLoader.load_model(self.model_params)
+            if self.nnp_model:
+                logger.info("NNP model loaded successfully")
             
         except Exception as e:
             logger.error(f"Error loading NNP model: {str(e)}", exc_info=True)
@@ -353,7 +299,7 @@ class BasinHoppingGenerator(BaseGenerator):
             
             # Update state if accepted
             if accepted:
-                self._append_to_output_file(optimized_structure, optimized_energy, step, accepted)
+                self._append_to_output_file(optimized_structure, optimized_energy, step, True)
                 self.current_structure = proposed_structure
                 self.current_optimized_structure = optimized_structure
                 self.current_energy = optimized_energy
@@ -380,6 +326,7 @@ class BasinHoppingGenerator(BaseGenerator):
                     self.best_energy = optimized_energy
                     logger.info(f"Step {step}: New best structure with energy {self.best_energy:.6f}")
             else:
+                self._append_to_output_file(optimized_structure, optimized_energy, step, False)
                 self.consecutive_rejections += 1
                 self.total_rejected += 1
                 self.stats["rejected_steps"] += 1
@@ -675,134 +622,11 @@ class BasinHoppingGenerator(BaseGenerator):
 
     def _get_specific_flipped_structure(self, structure: MolecularStructure, flip_angle: float) -> Optional[MolecularStructure]:
         """Generate a structure with a specific flip angle."""
-        try:
-            # Convert MolecularStructure to xyz list format
-            current_frame = structure.to_xyz_list()
-            
-            # Get sugar statistics
-
-            sug_stat = sugar_stat(current_frame,
-                                find_O_on_C_ring=True,
-                                find_H_on_C_ring=True,
-                                find_O_on_C_chain=True,
-                                find_H_on_C_chain=True,
-                                find_H_on_O=True,
-                                find_H_on_C_orientation=True)
-
-            # Determine ring ID and position
-            ring_id = 0
-            position_str = self.flip_generator.params["position"]
-            position = int(position_str[0])
-
-            if not position_str.endswith("NR"):
-                ring_id = 1
-
-            # Get atom IDs for flipping
-            C_id = sug_stat["C_ring"][ring_id][position-1]
-            HC_id = sug_stat["H_on_C_ring"][ring_id][position-1]
-            O_id = sug_stat["O_on_C_ring"][ring_id][position-1]
-            HO_id = sug_stat["H_on_O"][ring_id][position-1]
-
-            C_flip_atom = (C_id, O_id)
-            CH_bond = (C_id, HC_id)
-
-            # Handle special case for N-Acetyl group
-            if O_id == -1 and HO_id == -1:
-                # Assuming C_NH_CO_CHHH contains N-Acetyl group information
-                flip_group = sug_stat["C_NH_CO_CHHH"][0]
-                # Find proton ID if needed
-                from molecule_stat import molecule_stat
-                from flatten_list import flatten_concatenation
-                
-                sugar_list = [s for s in current_frame]
-                mol_stat = molecule_stat(sugar_list)
-                ONAc_bond = [ele for ele in mol_stat["mol_bond_pattern"][0] if ele[1] == flip_group[4]]
-                H_id = [idx for idx, ele in enumerate(sugar_list) if ele[0] == "H"]
-                proton_id = set(flatten_concatenation(ONAc_bond)).intersection(H_id)
-                
-                flip_group.extend(proton_id)
-                C_flip_atom = (C_id, flip_group[1])
-            else:
-                flip_group = (C_id, O_id, HO_id)
-
-            # Perform the flip
-            from xyz_toolsx import flip
-            flipped_xyz = flip(current_frame, CH_bond, C_flip_atom, CH_bond, flip_group)
-            
-            # Rotate with the specified angle
-            from xyz_tools import turn
-            rotated_xyz = turn(flipped_xyz,
-                             rotate_atom_list=flip_group,
-                             rotate_bond=C_flip_atom,
-                             angle=flip_angle)
-            
-            # Convert xyz_list to MolecularStructure obj
-            flipped_structure = MolecularStructure.from_xyz_list(rotated_xyz)
-            flipped_structure.metadata = structure.metadata.copy() if structure.metadata else {}
-            flipped_structure.metadata.update({
-                "operation": "flip",
-                "base_structure": structure.metadata.get('source_file', ''),
-                "ring_id": ring_id,
-                "position": position,
-                "angle_val": flip_angle
-            })
-            
-            # Check if physically reasonable
-            if self.check_physical:
-                check_result = is_physical_geometry(rotated_xyz, **self.check_physical_kwargs)
-                if check_result != "normal":
-                    return None
-            
-            return flipped_structure
-            
-        except Exception as e:
-            logger.error(f"Error generating flipped structure: {str(e)}", exc_info=True)
-            return None
+        return self.flip_generator.generate_grid(structure, flip_angle)
 
     def _get_specific_attached_structure(self, structure: MolecularStructure, attach_angle: float) -> Optional[MolecularStructure]:
         """Generate a structure with a specific attach rotation angle."""
-        try:
-            base_frame = structure.to_xyz_list()
-            
-            # Load seed structure
-
-            seed_xyz_obj = Xyz(self.seed_structure)
-            seed_frame = seed_xyz_obj.next()
-
-            # Attach the structures
-            attached = attach(base_frame, seed_xyz_list=seed_frame, **self.attach_rotate_generator.params["attach_kwargs"])
-
-            # Get atom counts for rotation
-            n_atom = len(base_frame)
-            n_atom_1 = len(seed_frame)
-
-            # Set up rotation parameters
-            rot_bond = self.attach_rotate_generator.params["rotate_bond_list"][0]
-            rot_atoms = set(list(rot_bond) + list(range(n_atom-1, n_atom+n_atom_1-3)))
-
-            # Rotate with the specified angle
-            rotated = turn(attached, rotate_bond=rot_bond, rotate_atom_list=rot_atoms, angle=attach_angle)
-            
-            # Convert to MolecularStructure
-            attached_structure = MolecularStructure.from_xyz_list(rotated)
-            attached_structure.metadata = structure.metadata.copy() if structure.metadata else {}
-            attached_structure.metadata.update({
-                "operation": "attach_rotate",
-                "seed_structure": self.seed_structure,
-                "rot_angle": attach_angle
-            })
-            
-            # Check if physically reasonable
-            if self.check_physical:
-                check_result = is_physical_geometry(rotated, **self.check_physical_kwargs)
-                if check_result != "normal":
-                    return None
-                    
-            return attached_structure
-            
-        except Exception as e:
-            logger.error(f"Error generating attached structure: {str(e)}", exc_info=True)
-            return None
+        return self.attach_rotate_generator.generate_grid(structure, attach_angle, self.seed_structure)
             
     def _get_specific_protonated_structure(self, structure: MolecularStructure, proton_grid_idx: int) -> Optional[MolecularStructure]:
         """Generate a structure with a specific proton added at a specific position.
@@ -816,228 +640,10 @@ class BasinHoppingGenerator(BaseGenerator):
         """
         #with open("b4_add_H.xyz", 'a') as f:
         #    f.write(structure.to_xyz_str())
-        try:
-            # Get the atom type and angle from the proton grid
-            if proton_grid_idx < 0 or proton_grid_idx >= len(self.proton_grid):
-                logger.warning(f"Invalid proton_grid_idx: {proton_grid_idx}")
-                return None
-                
-            at_idx, angle_val, atom_type = self.proton_grid[proton_grid_idx]
-            
-            # Get structure info
-            info = self.proton_generator._get_structure_info(structure)
-            current_frame = info['frame']
-            coor = info['coor']
-
-
-            O_chain = info.get("O_on_C_chain", [])
-            for I0, O_ring_id in enumerate(info["O_ring"]):
-                info["O_on_C_chain"][I0][4] = O_ring_id[0]
-
-            flatten_O_ring = flatten_concatenation(info.get("O_ring", []))
-
-            flatten_O_on_C_chain = flatten_concatenation(info.get("O_on_C_chain", []))
-
-            flattened_C_chain = flatten_concatenation(info.get("C_chain", []))
-            flattened_H_on_O = flatten_concatenation(info.get("H_on_O", []))
-
-            
-            
-            # Handle different atom types
-            if atom_type == "OCH":  # hydroxyl O
-                try:
-                    pos_idx = flatten_O_on_C_chain.index(at_idx)
-                    c_idx = flattened_C_chain[pos_idx]
-                    h_idx = flattened_H_on_O[pos_idx]
-                except Exception as e:
-                    raise
-                
-                
-                # Calculate vectors for the C-O and O-H bonds
-                CO_vec = coor[at_idx] - coor[c_idx]
-                OH_vec = coor[h_idx] - coor[at_idx]
-                
-                # Convert angle from degrees to radians
-                angle_rad = angle_val * (np.pi / 180)
-                
-                # Rotate the O-H vector around the C-O axis to get new proton position
-                rotated_OH_vec = np.dot(rotation_matrix_numpy(CO_vec, angle_rad), OH_vec)
-                proton_pos = coor[at_idx] + rotated_OH_vec
-                
-                atom_metadata = {
-                    "site": "hydroxyl_O",
-                    "pos_idx": pos_idx,
-                    "o_idx": at_idx
-                }
-                
-            elif atom_type == "OCC":  # ring O or glycosidic O
-                if at_idx in flatten_O_ring:
-                    # ring O, determine C1-C5 next
-                    ring_idx = flatten_O_ring.index(at_idx)
-                    neighbor_c1_idx = info["C_chain"][ring_idx][0] #C1
-                    neighbor_c2_idx = info["C_chain"][ring_idx][4] #C5
-                else:
-                    # glycosidict O
-                    #O_glycosidic = set(info["O_on_C_chain"][0], info["O_on_C_chain"][1])
-                    neighbor_c1_pos = info["O_on_C_chain"][0].index(at_idx)
-                    neighbor_c2_pos = info["O_on_C_chain"][1].index(at_idx)
-
-                    neighbor_c1_idx = info["C_chain"][0][neighbor_c1_pos]
-                    neighbor_c2_idx = info["C_chain"][1][neighbor_c2_pos]
-
-                
-                # Convert angle from degrees to radians
-                angle_rad = angle_val * (np.pi / 180)
-                
-                # Calculate the proton position
-                proton_pos = self._calculate_proton_position(at_idx, [neighbor_c1_idx, neighbor_c2_idx], coor, angle_rad,
-                                                          self.proton_generator.params["proton_Oring_dist"])
-                
-                atom_metadata = {
-                    "site": "ring_O",
-                    "o_idx": at_idx
-                }
-                
-            elif atom_type == "OC":  # NAc O
-                # Check if NAc group exists
-                if 'C_NH_CO_CHHH' not in info or not info['C_NH_CO_CHHH']:
-                    logger.warning("No NAc groups found for protonation")
-                    return None
-                
-                # Get a random NAc group
-                nac_group = info["C_NH_CO_CHHH"][0]
-                             
-                # Extract atom indices from the NAc group
-                C_id, N_id, HN_id, CO_id, OC_id, C_methyl_id, H_methyl_1, H_methyl_2, H_methyl_3 = nac_group
-                
-                # Set up a spherical coordinates around O carbonyl
-                z_axis = unit_vector(coor[OC_id] - coor[CO_id])
-                
-                # Find the X-axis vector perpendicular to Z
-                temp_vec = coor[C_id] - coor[CO_id]
-                # Remove any component along z-axis to get the perpendicular vector
-                temp_vec -= np.dot(temp_vec, z_axis) * z_axis
-                
-                if np.linalg.norm(temp_vec) < 1e-6:
-                    # If temp_vec is too small, try another reference point
-                    temp_vec = coor[N_id] - coor[CO_id]
-                    temp_vec -= np.dot(temp_vec, z_axis) * z_axis
-                
-                x_axis = unit_vector(temp_vec)
-                # y-axis completes the right-handed coordinate system
-                y_axis = np.cross(z_axis, x_axis)
-                
-                # Define the theta angle (from z-axis)
-                theta = 0.37 * np.pi
-                
-                # Define 5 evenly distributed phi angles around z-axis (use angle_idx to choose one)
-                phi_values = [i * 2 * np.pi / 5 for i in range(5)]
-                phi_val = phi_values[int(angle_val) % 5]  # angle_val is the index of phi angle
-                
-                # Define r values
-                r = self.proton_generator.params["proton_Oring_dist"]
-                
-                # Convert spherical coordinates to Cartesian coordinates
-                x_local = r * math.sin(theta) * math.cos(phi_val)
-                y_local = r * math.sin(theta) * math.sin(phi_val)
-                z_local = r * math.cos(theta)
-                
-                # Transform to global coordinates
-                proton_vector = x_local * x_axis + y_local * y_axis + z_local * z_axis
-                proton_pos = coor[OC_id] + proton_vector
-                
-                atom_metadata = {
-                    "site": "NAc_O",
-                    "phi_idx": int(angle_val)
-                }
-                
-            elif atom_type == "N":  # NAc N
-                # Check if NAc group exists
-                if 'C_NH_CO_CHHH' not in info or not info['C_NH_CO_CHHH']:
-                    logger.warning("No NAc groups found for protonation")
-                    return None
-                
-                # Get a random NAc group
-                nac_group = info["C_NH_CO_CHHH"][0]
-                
-                # Extract atom indices from the NAc group
-                C_id, N_id, HN_id, CO_id, OC_id, C_methyl_id, H_methyl_1, H_methyl_2, H_methyl_3 = nac_group
-                
-                # Calculate vectors
-                C2CO_vec = coor[CO_id] - coor[C_id]
-                NH_vec = coor[HN_id] - coor[N_id]
-                
-                # Convert angle from degrees to radians
-                angle_rad = angle_val * (np.pi / 180)
-                
-                # Rotate NH vector around C2CO axis
-                rotated_NH_vec = np.dot(rotation_matrix_numpy(C2CO_vec, angle_rad), NH_vec)
-                proton_pos = coor[N_id] + rotated_NH_vec
-                
-                atom_metadata = {
-                    "site": "NAc_N"
-                }
-                
-            else:
-                logger.warning(f"Invalid atom_type: {atom_type}")
-                return None
-            
-            if proton_pos is None:
-                logger.warning(f"Failed to calculate proton position for atom_type {atom_type}, angle {angle_val}")
-                return None
-                
-            # Create the protonated structure
-            # Add the proton to the structure
-            proton_coor = ("H", *proton_pos)
-            protonated_frame = current_frame.copy() + [proton_coor]
-            
-            # Check if physically reasonable
-            if self.check_physical:
-                check_result = is_physical_geometry(protonated_frame, **self.check_physical_kwargs)
-                if check_result != "normal":
-                    logger.debug(f"Generated protonated structure is not physically reasonable")
-                    return None
-            
-            # Convert to MolecularStructure
-            mol_structure = MolecularStructure.from_xyz_list(protonated_frame)
-            mol_structure.metadata = structure.metadata.copy() if structure.metadata else {}
-            mol_structure.metadata.update({
-                "operation": "add_proton",
-                "proton_grid_idx": proton_grid_idx,
-                "proton_description": "none",
-                "angle_val": angle_val,
-                **atom_metadata
-            })
-            
-            return mol_structure
-            
-        except Exception as e:
-            logger.error(f"Error generating protonated structure: {str(e)}", exc_info=True)
+        if proton_grid_idx < 0 or proton_grid_idx >= len(self.proton_grid):
+            logger.warning(f"Invalid proton grid index: {proton_grid_idx}")
             return None
-    
-    def _calculate_proton_position(self, O_id, connecting_atoms, coor, angle, HO_len):
-        """Calculate H+ position around O with specified parameters."""
-        try:
-            # Vector between connecting atoms
-            c1_c2_vec = coor[connecting_atoms[1]] - coor[connecting_atoms[0]]
-            
-            # Get vector for rotation
-            oc1_vec = coor[connecting_atoms[0]] - coor[O_id]
-            oc2_vec = coor[connecting_atoms[1]] - coor[O_id]
-            
-            # Use average vector for better proton placement
-            avg_oc_vec = (oc1_vec + oc2_vec) / 2
-            
-            # Add H+ at the specified angle around the oxygen
-
-            rotated_vec = np.dot(rotation_matrix_numpy(c1_c2_vec, angle), avg_oc_vec)
-            proton_pos = coor[O_id] + unit_vector(rotated_vec) * HO_len
-            
-            return proton_pos
-            
-        except Exception as e:
-            logger.error(f"Error calculating H+ position around O: {str(e)}")
-            return None
+        return self.proton_generator.generate_grid(structure, self.proton_grid[proton_grid_idx])
     
     def _load_structure(self, structure_path: str) -> Optional[MolecularStructure]:
         """Load a structure from file."""
@@ -1066,7 +672,7 @@ class BasinHoppingGenerator(BaseGenerator):
         
         return random.random() < boltzmann_factor
     
-    def _append_to_output_file(self, structure: MolecularStructure, energy: float, step: int, accepted: bool):
+    def _append_to_output_file(self, structure: MolecularStructure, energy: float, step: int, accept: bool):
         """Append a structure to the output XYZ file."""
         try:
             xyz_str = structure.to_xyz_str()
@@ -1103,8 +709,12 @@ class BasinHoppingGenerator(BaseGenerator):
             xyz_str = "\n".join(lines)
             
             # Append to the output file
-            with open(self.output_xyz, 'a') as f:
-                f.write(xyz_str + "\n")
+            if accept:
+                with open(self.accepted_xyz, "a") as f:
+                    f.write(xyz_str + "\n")
+            else:
+                with open(self.rejected_xyz, "a") as f:
+                    f.write(xyz_str + "\n")
                 
         except Exception as e:
             logger.error(f"Error appending to output file: {str(e)}")
@@ -1163,9 +773,9 @@ class BasinHoppingGenerator(BaseGenerator):
                 lines = xyz_str.strip().split("\n")
                 lines[1] = f"eng= {energy} Properties=species:S:1:pos:R:3:force:R:3"
 
-                xyz_str = "\n".join(lines) + "\n"
+                xyz_str = "\n".join(lines)
 
-                f.write(xyz_str)
+                f.write(xyz_str + "\n")
 
         #shutil.copy2(opt_traj, saved_trajectory_path)
         logger.info(f"Saved trajectory file to {saved_trajectory_path}")

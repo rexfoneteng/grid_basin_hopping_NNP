@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""
-Configuration utilities for basin hopping simulations.
-Handles loading, validation, and management of YAML configurations.
-"""
+# -*- coding: utf-8 -*-
+# @Author: Phan Huu Trong
+# @Date:   2025-04-11 20:52:30
+# @Email:  phanhuutrong93@gmail.com
+# @Last modified by:   vanan
+# @Last modified time: 2025-04-16 17:46:13
+# @Description: Configuration utilities for basin hopping simulations. Handles loading, validation, and management of YAML configurations.
+
 import os
 import yaml
 import logging
@@ -10,7 +14,7 @@ import yaml
 
 from basin_hopping.operation_type import OperationType
 from core.constants import PHYSICAL_DICT
-from utils.file_utils import resolve_base_structures
+from utils.file_utils import resolve_structures
 
 logger = logging.getLogger(__name__)
 
@@ -28,71 +32,17 @@ def load_config(config_path=None):
     config = {
         'output_dir': 'basin_hopping_output',
         'base_structures': "./",
-        'seed_structure': None,
+        'seed_structures': None,
         'temperature': 300.0,
         'max_rejected': 50,
         'save_trajectories': False,
         'steps': 100,
         'operations': ['flip', 'attach_rotate', 'add_proton'],
-        'model': {
-            'state_dict': None,
-            'prop_stats': None,
-            'device': 'cpu',
-            'in_module': {
-                "n_atom_basis": 128,
-                "n_filters": 128,
-                "n_gaussians": 75,
-                "charged_systems": True,
-                "n_interactions": 4,
-                "cutoff": 15.0
-            },
-            'interface_params': {
-                "energy": "energy",
-                "forces": "force",
-                "energy_units": "Hartree",
-                "forces_units": "Hartree/Angstrom"
-            }
-        },
-        'optimization': {
-            'fmax': 5e-3,
-            'steps': 1200
-        },
         'physical_check': {
             'enabled': True,
             'params': PHYSICAL_DICT
-        },
-        'flip_grid': [0, 120, 240],
+        }, 
         'attach_rotate_grid': [0, 60, 120, 180, 240, 300],
-        'proton_grid': [
-            [16, -130, "OCC"],
-            [16, 130, "OCC"],
-            [0, -130, "OCC"],
-            [0, 130, "OCC"],
-            [21, -120, "OCH"],
-            [21, 120, "OCH"],
-            [19, -120, "OCH"],
-            [19, 120, "OCH"],
-            [17, -120, "OCH"],
-            [17, 120, "OCH"],
-            [14, -120, "OCH"],
-            [14, 120, "OCH"],
-            [39, -130, "OCC"],
-            [39, 130, "OCC"],
-            [24, -120, "OCH"],
-            [24, 120, "OCH"],
-            [43, -67.5, "N"],
-            [43, 67.5, "N"],
-            [50, 0, "OC"],
-            [50, 60, "OC"],
-            [50, 120, "OC"],
-            [50, 180, "OC"],
-            [50, 240, "OC"],
-            [50, 300, "OC"],
-            [40, -120, "OCH"],
-            [40, 120, "OCH"],
-            [37, -120, "OCH"],
-            [37, 120, "OCH"]
-        ],
         'logging': {
             'level': 'INFO',
             'file': 'basin_hopping.log'
@@ -111,7 +61,10 @@ def load_config(config_path=None):
 
     # Resolve base_structures
     if config["base_structures"]:
-        config["base_structures"] = resolve_base_structures(config["base_structures"])
+        config["base_structures"] = resolve_structures(config["base_structures"])
+
+    if config["seed_structures"]:
+        config["seed_structures"] = resolve_structures(config["seed_structures"])
 
     return config
 
@@ -147,8 +100,8 @@ def merge_cli_with_config(args, config):
     if hasattr(args, 'base_structures') and args.base_structures:
         config['base_structures'] = args.base_structures
     
-    if hasattr(args, 'seed_structure') and args.seed_structure:
-        config['seed_structure'] = args.seed_structure
+    if hasattr(args, 'seed_structures') and args.seed_structures:
+        config['seed_structures'] = args.seed_structures
     
     if hasattr(args, 'operations') and args.operations:
         config['operations'] = args.operations
@@ -179,7 +132,7 @@ def merge_cli_with_config(args, config):
 
     # Resolve base_structures
     if args.base_structures:
-        config["base_structures"] = resolve_base_structures(args.base_structures)
+        config["base_structures"] = resolve_structures(args.base_structures)
     
     return config
 
@@ -201,10 +154,8 @@ def validate_config(config):
     
     # Check for seed structure if needed
     if "attach_rotate" in config['operations']:
-        if not config["seed_structure"]:
+        if not config["seed_structures"]:
             errors.append("Seed structure required for attach_rotate operation")
-        elif not os.path.exists(config["seed_structure"]):
-            errors.append(f"Seed structure file not found: {config['seed_structure']}")
 
     # Check model
     model_state = config["model"]["state_dict"]

@@ -70,14 +70,14 @@ class MolecularStructure:
         return cls(coordinates=coordinates, atomic_numbers=atomic_numbers,
                    atoms=atoms, forces=forces, metadata=metadata)
 
-    def to_xyz_str(self, include_forces: bool = False) -> str:
+    def to_xyz_str(self, include_forces: bool = False, info="") -> str:
         """ Convert structure to XYZ format string.
 
         Returns:
             XYZ format string representation of the structure
         """
         n_atoms = len(self.atoms)
-        xyz_str = f"{n_atoms}\n\n"
+        xyz_str = f"{n_atoms}\n{info}\n"
 
         if self.forces is not None and include_forces:
             for i in range(n_atoms):

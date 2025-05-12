@@ -8,10 +8,14 @@
 # ==============================================================
 from collections import OrderedDict
 from std_tools import std_err
-from xyz_tools import xyz2list
+from xyz_tools import xyz2list, molecule_stat
 from sklearn.metrics import pairwise_distances
 from itertools import product
 import numpy as np
+from core.molecular_structure import MolecularStructure
+from typing import Optional
+from const_tools import cutoff_sq
+
 #class DistMat:
 #    r"""Class to check the physical geometries via the distance matrix
 #    Args:
@@ -35,17 +39,19 @@ def is_physical_geometry(xyz_frame, triu_ids=None, at_at_triu=None, n_atoms=None
                          OO_min_threshold=1.4, HH_min_threshold=.5,
                          catX_min_threshold=1.4, catH_min_threshold=.5,
                          NC_min_threshold=1.0, NO_min_threshold=1.4,
-                         NH_min_threshold=.5):
+                         NH_min_threshold=.5,
+						 ignore_id=[]):
     """
     Check a geometry via the distanace matrix
     Note:
     This script assume the system has zero or one cation absorp in the molecule only.
     More than one cation atoms may not work well by this script
     """
-    atom_list, coor_list = [], []
-    for coor in xyz_frame:
-        atom_list.append(coor[0])
-        coor_list.append(coor[1:4])
+    atom_list, coor_list= [], []
+    for at_id, coor in enumerate(xyz_frame):
+        if at_id not in ignore_id:
+            atom_list.append(coor[0])
+            coor_list.append(coor[1:4])
 
     cation_list = [ele for ele in atom_list if ele in ("Li", "Na")]
     #print(cation)
@@ -99,6 +105,52 @@ def is_physical_geometry(xyz_frame, triu_ids=None, at_at_triu=None, n_atoms=None
         return "normal"
     else:
         return brk_label
+
+def validate_structure(structure: MolecularStructure, ignore_atom=("Li", "Na"), brk_pattern=["OCHHH"], cutoff_sq_kwargs={}, **kwargs) -> Optional[MolecularStructure]:
+    """
+        Validate the optimized molecular structure to determine if it's broken or intact.
+    
+        Args:
+         structure: A MolecularStructure object to validate
+            ignore_atom: Tuple of atom symbols to ignore (typically cations)
+            brk_pattern: List of patterns that indicate a broken structure
+    
+        Returns:
+            The original structure if valid, None if the structure is broken
+        
+        Validation steps:
+            1. Removes cations specified in ignore_atom
+            2. Checks if multiple molecular fragments exist
+            3. Verifies no broken patterns are present
+            4. Ensures geometry meets physical constraints
+    """
+        # remove cation
+    try: 
+        coor = [ele for ele in structure.to_xyz_list() if ele[0] not in ignore_atom]
+        mol_stat = molecule_stat(coor)
+
+        cutoff_sq.update(cutoff_sq_kwargs)
+        # Check is there any smaller fragments
+        if len(mol_stat["mol_type_list"]) > 1:
+            return None
+
+        # check if BRK pattern exists
+        intersec = set(mol_stat["mol_type_list"][0]).intersection(set(brk_pattern))
+        if intersec:
+            return None
+
+        check_phys = is_physical_geometry(coor, 
+                                            CO_min_threshold=1.1713,
+                                            CH_min_threshold=0.88,
+                                            OH_min_threshold=0.71,
+                                            HH_min_threshold=1.53,
+                                            OO_min_threshold=1.60,
+                                            ignore_id=[45])
+        if check_phys == "BRK":
+            return None
+        return structure
+    except Exception as e:
+        return None
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,12 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# @Author: Phan Huu Trong
+# @Date:   2025-04-11 20:52:30
+# @Email:  phanhuutrong93@gmail.com
+# @Last modified by:   vanan
+# @Last modified time: 2025-05-02 17:25:26
+# @Description: Attach and Rotate Generator
+
 import numpy as np
 import logging
 from typing import List, Dict, Any, Tuple, Optional, Set
@@ -65,40 +74,43 @@ class AttachRotateGenerator(BaseGenerator):
         """Update parameters for the attach-rotate operation."""
         self.params.update(kwargs)
 
+
+
     def generate_grid(self, structure, attach_angle, seed_structure=None):
         """
         Generate a structure with a specific attach rotation angle.
-        
+
         Args:
             structure: Input molecular structure
             attach_angle: Specific rotation angle to use (degrees)
             seed_structure: Path to seed structure file (optional)
-            
+
         Returns:
             Attached structure or None if generation failed
         """
+        if isinstance(attach_angle, (int, float)):
+            attach_angle = [attach_angle]
         try:
             base_frame = structure.to_xyz_list()
-            
+
             # Load seed structure
             seed_path = seed_structure if seed_structure else self.seed_structures[0]
             seed_xyz_obj = Xyz(seed_path)
             seed_frame = seed_xyz_obj.next()
 
             # Attach the structures
+            #attached = attach(base_frame, seed_xyz_list=seed_frame, align_bond_length=1.46, **self.params["attach_kwargs"])
             attached = attach(base_frame, seed_xyz_list=seed_frame, **self.params["attach_kwargs"])
 
             # Get atom counts for rotation
             n_atom = len(base_frame)
             n_atom_1 = len(seed_frame)
 
-            # Set up rotation parameters
-            rot_bond = self.params["rotate_bond_list"][0]
-            rot_atoms = set(list(rot_bond) + list(range(n_atom-1, n_atom+n_atom_1-3)))
+            for rot_bond, attach_angle_val in zip(self.params["rotate_bond_list"], attach_angle):
+                rot_atoms = set(list(rot_bond) + list(range(n_atom-1, n_atom+n_atom_1-3)))
+                rotated = turn(attached, rotate_bond=rot_bond, rotate_atom_list=rot_atoms, angle=attach_angle_val)
 
-            # Rotate with the specified angle
-            rotated = turn(attached, rotate_bond=rot_bond, rotate_atom_list=rot_atoms, angle=attach_angle)
-            
+
             # Convert to MolecularStructure
             attached_structure = MolecularStructure.from_xyz_list(rotated)
             attached_structure.metadata = structure.metadata.copy() if structure.metadata else {}
@@ -107,15 +119,17 @@ class AttachRotateGenerator(BaseGenerator):
                 "seed_structure": seed_path,
                 "rot_angle": attach_angle
             })
-            
+
             # Check if physically reasonable
             if self.check_physical:
                 check_result = is_physical_geometry(rotated, **self.check_physical_kwargs)
                 if check_result != "normal":
+                    #from xyz_tools import write_xyz_file
+                    #write_xyz_file("BRK.xyz", rotated, flag="a")
                     return None
-                    
+
             return attached_structure
-            
+
         except Exception as e:
             logger.error(f"Error generating attached structure: {str(e)}", exc_info=True)
             return None

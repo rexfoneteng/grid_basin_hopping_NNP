@@ -1,6 +1,11 @@
 from ase.units import eV, Hartree
 
 eV_TO_Ha_conversion = eV /  Hartree
+# Atom symbol to atomic number mapping
+ATOMIC_NUMBER_MAP = {
+    "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
+    "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18, "K": 19, "Ca": 20
+}
 
 PHYSICAL_DICT = {
     "CO_min_threshold": 1.2,
@@ -12,7 +17,7 @@ PHYSICAL_DICT = {
     "NH_min_threshold": 0.73,
     "HH_min_threshold": 0.66
 }
-# Atom symbol to atomic number mapping
+
 ATOMIC_NUMBER_MAP = {
     "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
     "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18, "K": 19, "Ca": 20
@@ -34,7 +39,7 @@ DEFAULT_ATTACH_ROTATE_PARAMS = {
         "seed_del_list": []
     },
     "rotate_bond_list": [[42, 43]],
-    "angle_list": (0, 1/3, 2/3, 1.0, 4/3, 5/3),
+    "angle_list": (0, 1/2, 1, 3/2),
     "merge_xyz": False
 }
 

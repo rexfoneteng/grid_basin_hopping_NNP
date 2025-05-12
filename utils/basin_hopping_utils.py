@@ -22,6 +22,7 @@ def prepare_basin_hopping(config):
     # Setup directories
     output_dir = config["output_dir"]
 
+    trajectories_dir = None
     if config["save_trajectories"]:
         trajectories_dir = "xyz_traj"
         if not os.path.exists(trajectories_dir):
@@ -40,6 +41,7 @@ def prepare_basin_hopping(config):
         "interface_params": config['model']['interface_params']
     }
 
+    input_xyz = os.path.join(output_dir, "input.xyz")
     accepted_xyz = os.path.join(output_dir, "accepted_structure.xyz")
     rejected_xyz = os.path.join(output_dir, "rejected_structure.xyz")
     stats_file = os.path.join(output_dir, "statistics.json")
@@ -50,6 +52,7 @@ def prepare_basin_hopping(config):
         'operation_sequence': operation_sequence,
         'model_params': model_params,
         'optimize_params': config['optimization'],
+        'input_xyz': input_xyz,
         'accepted_xyz': accepted_xyz,
         'rejected_xyz': rejected_xyz,
         'stats_file': stats_file,

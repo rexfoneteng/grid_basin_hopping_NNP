@@ -6,7 +6,7 @@ import glob
 import logging
 
 
-def resolve_base_structures(paths: Union[str, List[str]], extension: str = ".xyz") -> List[str]:
+def resolve_structures(paths: Union[str, List[str]], extension: str = ".xyz") -> List[str]:
     """
     Resolve base structure paths, handling file lists and directory scanning.
     

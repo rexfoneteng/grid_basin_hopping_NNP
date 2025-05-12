@@ -222,6 +222,6 @@ If you use this code in your research, please cite:
   year = {2025},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {\url{git@github.com:rexfoneteng/grid_basin_hopping_NNP.git}}
+  howpublished = {\url{https://github.com/rexfoneteng/grid_basin_hopping_NNP.git}}
 }
 ```

@@ -8,7 +8,7 @@ import logging
 
 def resolve_structures(paths: Union[str, List[str]], extension: str = ".xyz") -> List[str]:
     """
-    Resolve base structure paths, handling file lists and directory scanning.
+    Resolve structure paths, handling file lists and directory scanning.
     
     Args:
         paths: Path(s) to resolve - can be:

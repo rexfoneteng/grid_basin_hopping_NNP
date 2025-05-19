@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # @Author: Phan Huu Trong
-# @Date:   2025-04-11 20:52:30
+# @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-04-16 17:46:13
-# @Description: Configuration utilities for basin hopping simulations. Handles loading, validation, and management of YAML configurations.
+# @Last modified time: 2025-05-19 12:01:16
+# @Description: Configuration utilities for basin hopping simulations.
 
 import os
 import yaml
 import logging
-import yaml
 
 from basin_hopping.operation_type import OperationType
 from core.constants import PHYSICAL_DICT
@@ -30,24 +29,61 @@ def load_config(config_path=None):
     """
     # Default configuration
     config = {
-        'output_dir': 'basin_hopping_output',
-        'base_structures': "./",
-        'seed_structures': None,
-        'temperature': 300.0,
-        'max_rejected': 50,
-        'save_trajectories': False,
-        'steps': 100,
-        'operations': ['flip', 'attach_rotate', 'add_proton'],
-        'physical_check': {
-            'enabled': True,
-            'params': PHYSICAL_DICT
-        }, 
-        'attach_rotate_grid': [0, 60, 120, 180, 240, 300],
-        'logging': {
-            'level': 'INFO',
-            'file': 'basin_hopping.log'
+        "output_dir": "basin_hopping_output",
+        "base_structures": "./",
+        "seed_structures": None,
+        "temperature": 300.0,
+        "max_rejected": 50,
+        "save_trajectories": False,
+        "steps": 100,
+        "operations": ["flip", "attach_rotate", "add_proton"],
+        "optimizer": {"type": "nnp_gauss"},  # Options: "nnp", "gamess"
+        "optimization": {
+            "fmax": 5e-3,
+            "steps": 1200
+        },
+        "physical_check": {
+            "enabled": True,
+            "params": PHYSICAL_DICT
+        },
+        "flip_grid": [0, 120, 240],
+        "attach_rotate_grid": [0, 60, 120, 180, 240, 300],
+        "proton_grid": [
+            [16, -130, "OCC"],
+            [16, 130, "OCC"],
+            [0, -130, "OCC"],
+            [0, 130, "OCC"],
+            [21, -120, "OCH"],
+            [21, 120, "OCH"],
+            [19, -120, "OCH"],
+            [19, 120, "OCH"],
+            [17, -120, "OCH"],
+            [17, 120, "OCH"],
+            [14, -120, "OCH"],
+            [14, 120, "OCH"],
+            [39, -130, "OCC"],
+            [39, 130, "OCC"],
+            [24, -120, "OCH"],
+            [24, 120, "OCH"],
+            [43, -67.5, "N"],
+            [43, 67.5, "N"],
+            [50, 0, "OC"],
+            [50, 60, "OC"],
+            [50, 120, "OC"],
+            [50, 180, "OC"],
+            [50, 240, "OC"],
+            [50, 300, "OC"],
+            [40, -120, "OCH"],
+            [40, 120, "OCH"],
+            [37, -120, "OCH"],
+            [37, 120, "OCH"]
+        ],
+        "logging": {
+            "level": "INFO",
+            "file": "basin_hopping.log"
         }
     }
+    
     # Load and merge with file configuration if provided
     if config_path:
         try:
@@ -94,45 +130,48 @@ def merge_cli_with_config(args, config):
         Updated configuration dictionary
     """
     # Update config with command-line args if specified
-    if hasattr(args, 'output_dir') and args.output_dir:
-        config['output_dir'] = args.output_dir
+    if hasattr(args, "output_dir") and args.output_dir:
+        config["output_dir"] = args.output_dir
     
-    if hasattr(args, 'base_structures') and args.base_structures:
-        config['base_structures'] = args.base_structures
+    if hasattr(args, "base_structures") and args.base_structures:
+        config["base_structures"] = args.base_structures
     
-    if hasattr(args, 'seed_structures') and args.seed_structures:
-        config['seed_structures'] = args.seed_structures
+    if hasattr(args, "seed_structures") and args.seed_structures:
+        config["seed_structures"] = args.seed_structures
     
-    if hasattr(args, 'operations') and args.operations:
-        config['operations'] = args.operations
+    if hasattr(args, "operations") and args.operations:
+        config["operations"] = args.operations
     
-    if hasattr(args, 'temperature') and args.temperature:
-        config['temperature'] = args.temperature
+    if hasattr(args, "temperature") and args.temperature:
+        config["temperature"] = args.temperature
     
-    if hasattr(args, 'steps') and args.steps:
-        config['steps'] = args.steps
+    if hasattr(args, "steps") and args.steps:
+        config["steps"] = args.steps
     
-    if hasattr(args, 'max_rejected') and args.max_rejected:
-        config['max_rejected'] = args.max_rejected
+    if hasattr(args, "max_rejected") and args.max_rejected:
+        config["max_rejected"] = args.max_rejected
     
-    if hasattr(args, 'model_state') and args.model_state:
-        config['model']['state_dict'] = args.model_state
+    if hasattr(args, "model_state") and args.model_state:
+        config["model"]["state_dict"] = args.model_state
     
-    if hasattr(args, 'prop_stats') and args.prop_stats:
-        config['model']['prop_stats'] = args.prop_stats
+    if hasattr(args, "prop_stats") and args.prop_stats:
+        config["model"]["prop_stats"] = args.prop_stats
     
-    if hasattr(args, 'device') and args.device:
-        config['model']['device'] = args.device
+    if hasattr(args, "device") and args.device:
+        config["model"]["device"] = args.device
     
-    if hasattr(args, 'save_trajectories') and args.save_trajectories:
-        config['save_trajectories'] = args.save_trajectories
+    if hasattr(args, "save_trajectories") and args.save_trajectories:
+        config["save_trajectories"] = args.save_trajectories
     
-    if hasattr(args, 'log_level') and args.log_level:
-        config['logging']['level'] = args.log_level
+    if hasattr(args, "log_level") and args.log_level:
+        config["logging"]["level"] = args.log_level
 
     # Resolve base_structures
     if args.base_structures:
         config["base_structures"] = resolve_structures(args.base_structures)
+
+    if args.seed_structures:
+        config["seed_structures"] = resolve_structures(args.seed_structures)
     
     return config
 
@@ -153,18 +192,40 @@ def validate_config(config):
         errors.append("No base structures specified")
     
     # Check for seed structure if needed
-    if "attach_rotate" in config['operations']:
+    if "attach_rotate" in config["operations"]:
         if not config["seed_structures"]:
             errors.append("Seed structure required for attach_rotate operation")
+        #elif not os.path.exists(config["seed_structures"]):
+        #    errors.append(f"Seed structure file not found: {config["seed_structures"]}")
 
-    # Check model
-    model_state = config["model"]["state_dict"]
-    if model_state and not os.path.exists(model_state):
-        errors.append(f"Model state dictionary not found: {model_state}")
-
-    prop_stats = config["model"]["prop_stats"]
-    if prop_stats and model_state.endswith(".pth.tar") and not os.path.exists(prop_stats):
-        errors.append(f"Property stats file not found: {prop_stats}")
+    # Check optimizer configuration
+    optimizer_type = config["optimizer"]["type"]
+    if optimizer_type not in ["nnp", "dftb3", "nnp_gauss"]:
+        errors.append(f"Invalid optimizer type: {optimizer_type}. Supported types are 'nnp' and 'gamess'")
+    
+    # For NNP optimizer, check model state
+    if optimizer_type == "nnp":
+        model_state = config["optimizer"]["params"].get("state_dict")
+        if not model_state:
+            errors.append("NNP optimizer requires state_dict parameter")
+        elif not os.path.exists(model_state):
+            errors.append(f"Model state dictionary not found: {model_state}")
+        
+        # Check property stats for older model format
+        if model_state and model_state.endswith(".pth.tar"):
+            prop_stats = config["optimizer"]["params"].get("prop_stats")
+            if not prop_stats:
+                errors.append("Property stats required for .pth.tar model format")
+            elif not os.path.exists(prop_stats):
+                errors.append(f"Property stats file not found: {prop_stats}")
+    
+    # For GAMESS optimizer, check required parameters
+    if optimizer_type == "gamess":
+        gamess_params = config["optimizer"]["params"]
+        if "method" not in gamess_params:
+            errors.append("GAMESS optimizer requires 'method' parameter")
+        if "basis_set" not in gamess_params:
+            errors.append("GAMESS optimizer requires 'basis_set' parameter")
 
     try:
         parse_operation_sequence(config["operations"])
@@ -179,7 +240,7 @@ def validate_config(config):
         except Exception as e:
             errors.append(f"Failed to create output directory {output_dir}: {e}")
 
-    #Report errors if any
+    # Report errors if any
     if errors:
         for error in errors:
             logger.error(error)
@@ -211,7 +272,7 @@ def parse_operation_sequence(sequence_names):
         if name.lower() in operation_map:
             operations.append(operation_map[name.lower()])
         else:
-            valid_ops = ', '.join(operation_map.keys())
+            valid_ops = ", ".join(operation_map.keys())
             raise ValueError(f"Unknown operation: {name}. Valid operations are: {valid_ops}")
 
     return operations

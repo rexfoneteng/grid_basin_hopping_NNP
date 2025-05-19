@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # @Author: Phan Huu Trong
-# @Date:   2025-04-11 20:52:30
+# @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
-# @Last modified by:   PC_user
-# @Last modified time: 2025-05-11 09:59:48
-# @Description: Basin Hopping
+# @Last modified by:   vanan
+# @Last modified time: 2025-05-19 11:04:33
+# @Description: Basin Hopping - Structure Optimization with Neural Network Potentials
 
 import os
 import sys
-sys.path.insert(0, "/home/htphan/work/sugar/disaccharides/script/src/bh_nnp_1")
 import argparse
 import logging
 
@@ -25,75 +24,75 @@ def parse_arguments():
         description="Basin Hopping Optimization with Neural Network Potentials",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
+    
     parser.add_argument(
         "--config", "-c",
         help="Path to YAML configuration file"
     )
-
+    
     parser.add_argument(
         "--output-dir", "-o",
         help="Directory for output files"
     )
-
+    
     parser.add_argument(
         "--base-structures", "-b",
         nargs="+",
         help="List of base structure XYZ files"
     )
-
+    
     parser.add_argument(
         "--seed-structures", "-s",
         help="Seed structure XYZ file for attachment operations"
     )
-
+    
     parser.add_argument(
         "--operations",
         nargs="+",
         choices=["flip", "attach_rotate", "add_proton"],
         help="List of operations to perform in sequence"
     )
-
+    
     parser.add_argument(
         "--temperature", "-t",
         type=float,
         help="Temperature for Metropolis criterion (K)"
     )
-
+    
     parser.add_argument(
         "--steps", "-n",
         type=int,
         help="Number of basin hopping steps to perform"
     )
-
+    
     parser.add_argument(
         "--max-rejected",
         type=int,
         help="Maximum consecutive rejected moves before stopping"
     )
-
+    
     parser.add_argument(
         "--model-state",
         help="Path to NNP model state dictionary"
     )
-
+    
     parser.add_argument(
         "--prop-stats",
         help="Path to property statistics file for NNP model"
     )
-
+    
     parser.add_argument(
         "--device",
         choices=["cpu", "cuda"],
         help="Device to run NNP model on"
     )
-
+    
     parser.add_argument(
         "--save-trajectories",
         action="store_true",
         help="Save optimization trajectories"
     )
-
+    
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -104,22 +103,21 @@ def parse_arguments():
         "--export-config",
         help="Export default configuration to specified YAML file and exit"
     )
-
+    
     return parser.parse_args()
 
 def run_basin_hopping(config):
     """
     Run basin hopping with the provided configuration.
-
+    
     Args:
         config: Configuration dictionary
-
+        
     Returns:
         Exit code (0 for success, non-zero for error)
     """
     # Prepare parameters
     params = prepare_basin_hopping(config)
-    #print(params)
 
     try:
         logger.info("Initializing basin hopping generator...")
@@ -129,9 +127,9 @@ def run_basin_hopping(config):
             temperature=config['temperature'],
             check_physical=params['physical_check']['enabled'],
             check_physical_kwargs=params['physical_check']['params'],
-            model_params=params['model_params'],
+            optimizer_type=params['optimizer_type'],
+            optimizer_params=params['optimizer_params'],
             optimize_params=params['optimize_params'],
-            input_xyz=params["input_xyz"],
             accepted_xyz=params['accepted_xyz'],
             rejected_xyz=params['rejected_xyz'],
             max_rejected=config['max_rejected'],
@@ -174,12 +172,6 @@ def main():
     # Parse args
     args = parse_arguments()
 
-    #Load config
-    config = load_config(args.config)
-
-    if "output_dir" in config:
-        os.makedirs(config["output_dir"], exist_ok=True)
-
     # Handle config export if requested
     if args.export_config:
         # Setup basic logging for the export operation
@@ -188,6 +180,8 @@ def main():
         success = export_default_config(args.export_config)
         return 0 if success else 1
 
+    #Load config
+    config = load_config(args.config)
 
     # Merge with CLI args
     config = merge_cli_with_config(args, config)
@@ -195,7 +189,7 @@ def main():
     # Setup logging
     log_file = config.get("logging", {}).get("file")
     log_level = config.get("logging", {}).get("level", "INFO")
-    logger = setup_logger(name="basin_hopping", level=log_level,
+    logger = setup_logger(name="basin_hopping", level=log_level, 
                           log_file=log_file)
 
     # Validate config

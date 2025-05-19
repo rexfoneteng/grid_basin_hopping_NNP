@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""
-Utility functions for basin hopping simulations.
-"""
+# -*- coding: utf-8 -*-
+# @Author: Phan Huu Trong
+# @Date:   2025-04-17 16:34:44
+# @Email:  phanhuutrong93@gmail.com
+# @Last modified by:   vanan
+# @Last modified time: 2025-05-19 11:30:54
+# @Description: Utility functions for basin hopping simulations.
+
 import os
 import json
 import logging
@@ -21,38 +26,31 @@ def prepare_basin_hopping(config):
     """
     # Setup directories
     output_dir = config["output_dir"]
+    os.makedirs(output_dir, exist_ok=True)
 
-    trajectories_dir = None
+    trajectories_dir = os.path.join(output_dir, "trajectories")
     if config["save_trajectories"]:
-        trajectories_dir = "xyz_traj"
-        if not os.path.exists(trajectories_dir):
-            os.makedirs(trajectories_dir, exist_ok=True)
-            logger.info(f"Created trajectories directory: {trajectories_dir}")
+        os.makedirs(trajectories_dir, exist_ok=True)
+        logger.info(f"Created trajectories directory: {trajectories_dir}")
 
     # Parse operations sequence
     operation_sequence = parse_operation_sequence(config["operations"])
 
-    # Prepare model parameters
-    model_params = {
-        "state_dict": config['model']['state_dict'],
-        "prop_stats": config['model']['prop_stats'],
-        "device": config['model']['device'],
-        "in_module": config['model']['in_module'],
-        "interface_params": config['model']['interface_params']
-    }
+    # Prepare optimizer parameters
+    optimizer_params = config['optimizer']['params']
+    optimizer_type = config['optimizer']['type']
 
-    input_xyz = os.path.join(output_dir, "input.xyz")
     accepted_xyz = os.path.join(output_dir, "accepted_structure.xyz")
     rejected_xyz = os.path.join(output_dir, "rejected_structure.xyz")
     stats_file = os.path.join(output_dir, "statistics.json")
 
     return {
-        'output_dir': output_dir,
+        "output_dir": output_dir,
         'trajectories_dir': trajectories_dir,
         'operation_sequence': operation_sequence,
-        'model_params': model_params,
-        'optimize_params': config['optimization'],
-        'input_xyz': input_xyz,
+        'optimizer_type': optimizer_type,
+        'optimizer_params': optimizer_params,
+        'optimize_params': config["optimizer"]["params"],
         'accepted_xyz': accepted_xyz,
         'rejected_xyz': rejected_xyz,
         'stats_file': stats_file,
@@ -88,3 +86,33 @@ def save_results(stats_file, stats, best_energy, output_xyz):
     logger.info(f"Duration: {stats['duration']:.2f} seconds")
     logger.info(f"All structures have been saved to: {output_xyz}")
     logger.info(f"Statistics saved to: {stats_file}")
+
+def get_optimizer_summary(stats):
+    """
+    Generate a summary of optimization statistics.
+    
+    Args:
+        stats: Basin hopping statistics dictionary
+        
+    Returns:
+        String containing optimization summary
+    """
+    summary = []
+    summary.append(f"Basin Hopping Optimization Summary")
+    summary.append(f"===================================")
+    summary.append(f"Duration: {stats['duration']:.2f} seconds")
+    summary.append(f"Total steps: {stats['total_steps']}")
+    summary.append(f"Accepted moves: {stats['accepted_steps']}")
+    summary.append(f"Rejected moves: {stats['rejected_steps']}")
+    
+    # Calculate acceptance ratio, avoiding division by zero
+    total_attempts = max(1, stats['total_steps'])
+    acceptance_ratio = stats['accepted_steps'] / total_attempts
+    summary.append(f"Acceptance ratio: {acceptance_ratio:.2f}")
+    
+    summary.append(f"Stopping reason: {stats['stopping_reason']}")
+    summary.append(f"Best energy found: {stats['best_energy']:.6f}")
+    summary.append(f"Optimization failures: {stats['optimization_failures']}")
+    summary.append(f"Generation failures: {stats['generation_failures']}")
+    
+    return "\n".join(summary)

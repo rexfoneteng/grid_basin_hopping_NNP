@@ -4,7 +4,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-19 12:12:16
+# @Last modified time: 2025-05-20 10:12:54
 # @Description: Basin Hopping Engine
 
 import numpy as np
@@ -182,14 +182,29 @@ class BasinHoppingGenerator(BaseGenerator):
             params=DEFAULT_ADD_PROTON_PARAMS.copy(),
             check_physical=self.check_physical,
             check_physical_kwargs=self.check_physical_kwargs)
-        
-        # Map operation types to generator instances
+
         self.generators = {
             OperationType.FLIP: self.flip_generator,
             OperationType.ATTACH_ROTATE: self.attach_rotate_generator,
-            OperationType.ADD_PROTON: self.proton_generator
-        }
-        
+            OperationType.ADD_PROTON: self.proton_generator}
+
+        if "functional_to_ch" in self.operation_sequence:
+            from generators.functional_to_ch_generator import FunctionalToChGenerator
+            self.functional_to_ch_generator = FunctionalToChGenerator(
+                                base_structures=self.base_structures,
+                                check_physical=self.check_physical,
+                                check_physical_kwargs=self.check_physical_kwargs)
+            self.generators.update({OperationType.FUNCTIONAL_TO_CH: self.functional_to_ch_generator})
+
+        if "ch_to_methyl" in self.operation_sequence:
+            from generators.ch_to_methyl_generator import ChToMethylGenerator
+            self.ch_to_methyl_generator = ChToMethylGenerator(
+                                base_structures=self.base_structures,
+                                check_physical=self.check_physical,
+                                check_physical_kwargs=self.check_physical_kwargs)
+            self.generators.update({OperationType.CH_TO_METHYL: self.ch_to_methyl_generator})
+        # Map operation types to generator instances
+
         # Configure the specific parameters for each generator
         self.flip_generator.set_params(
             position="4NR",  # Position to flip (can be customized)
@@ -519,6 +534,10 @@ class BasinHoppingGenerator(BaseGenerator):
                 # Random proton grid index (combines atom type and angle)
                 proton_grid_idx = random.randint(0, len(self.proton_grid) - 1)
                 grid_point.append(proton_grid_idx)
+            elif op == OperationType.FUNCTIONAL_TO_CH:
+                grid_point.append(0) # Only 1 grid with id 0
+            elif op == OperationType.CH_TO_METHYL:
+                grid_point.append(0) # Only 1 grid with id 0
                 
         return tuple(grid_point)
     
@@ -590,6 +609,13 @@ class BasinHoppingGenerator(BaseGenerator):
                     if not structure:
                         logger.warning(f"Failed to add proton to structure using grid point {proton_grid_idx}")
                         return None
+
+                elif op_type == OperationType.FUNCTIONAL_TO_CH:
+                    grid_idx += 1
+                    structure = self._get_specific_functional_to_ch(structure)
+                elif op_type == OperationType.CH_TO_METHYL:
+                    grid_idx += 1
+                    structure = self._get_specific_ch_to_methyl(structure)
             
             # Add grid point to metadata
             structure.metadata['grid_point'] = grid_point
@@ -626,6 +652,10 @@ class BasinHoppingGenerator(BaseGenerator):
             logger.warning(f"Invalid proton grid index: {proton_grid_idx}")
             return None
         return self.proton_generator.generate_grid(structure, self.proton_grid[proton_grid_idx])
+
+    def _get_specific_functional_to_ch(self, structure: MolecularStructure) -> Optional[MolecularStructure]:
+        """Generate a structure with a specific functional group to CH truncation"""
+        return self.functional_to_ch_generator.generate_grid
     
     def _load_structure(self, structure_path: str) -> Optional[MolecularStructure]:
         """Load a structure from file."""

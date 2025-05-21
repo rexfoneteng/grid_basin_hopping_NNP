@@ -4,14 +4,14 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-20 10:12:54
+# @Last modified time: 2025-05-20 17:43:26
 # @Description: Basin Hopping Engine
 
 import numpy as np
 import logging
 import random
 import os
-from typing import List, Dict, Any, Tuple, Optional, Union, Callable
+from typing import List, Dict, Any, Tuple, Optional, Union, Callable, Union
 import time
 from ase.io import read
 from rotational_matrix import rotation_matrix_numpy
@@ -37,7 +37,7 @@ class BasinHoppingGenerator(BaseGenerator):
 
     def __init__(self, 
                  base_structures: List[str],
-                 seed_structures: str,
+                 seed_structures: Union[str, None] = None,
                  temperature: float = 300.0,
                  check_physical: bool = True,
                  check_physical_kwargs: Optional[Dict[str, Any]] = None,
@@ -49,6 +49,7 @@ class BasinHoppingGenerator(BaseGenerator):
                  rejected_xyz: str = "rejected_structure.xyz",
                  max_rejected: int = 100,
                  operation_sequence: List[OperationType] = None,
+                 operation_params: Union[List, Dict] = None,
                  attach_params: Dict = {"angle_list": [(0, 0), (0, 120), (0, 240), (120, 0), (120, 120), (120, 240), (240, 0), (240, 120), (240, 240)]},
                  save_trj: bool = False,
                  trajectory_dir: str = "opt_trj",
@@ -66,6 +67,7 @@ class BasinHoppingGenerator(BaseGenerator):
             accepted_xyz: Path to the output XYZ file where all local minima will be appended
             max_rejected: Maximum number of consecutive rejected moves before stopping
             operation_sequence: Sequence of operations to apply (default: FLIP, ATTACH_ROTATE)
+            operation_params: List of parameters corresponds to the each operations listed in the operation_sequence
         """
         super().__init__(check_physical, check_physical_kwargs)
         
@@ -88,6 +90,10 @@ class BasinHoppingGenerator(BaseGenerator):
         self.trajectory_dir = trajectory_dir
         if self.save_trj and not os.path.exists(trajectory_dir):
             os.makedirs(self.trajectory_dir, exist_ok=True)
+
+        self.operation_params = operation_params
+        if isinstance(self.operation_params, dict):
+            self.operation_params = [self.operation_params]
 
         self.energy_outliner_threshold = energy_outliner_threshold
         
@@ -161,14 +167,6 @@ class BasinHoppingGenerator(BaseGenerator):
         if not self.optimizer:
             logger.warning(f"Failed to create optimizer of type '{optimizer_type}'. "
                           "Basin hopping will run without optimization.")
-
-        
-        # Initialize operation generators
-        self.flip_generator = FlipGenerator(
-            base_structures=self.base_structures,
-            params=DEFAULT_FLIP_PARAMS.copy(),
-            check_physical=self.check_physical,
-            check_physical_kwargs=self.check_physical_kwargs)
             
         self.attach_rotate_generator = AttachRotateGenerator(
             base_structures=self.base_structures,
@@ -184,25 +182,33 @@ class BasinHoppingGenerator(BaseGenerator):
             check_physical_kwargs=self.check_physical_kwargs)
 
         self.generators = {
-            OperationType.FLIP: self.flip_generator,
             OperationType.ATTACH_ROTATE: self.attach_rotate_generator,
             OperationType.ADD_PROTON: self.proton_generator}
 
-        if "functional_to_ch" in self.operation_sequence:
+        if OperationType.FLIP in self.operation_sequence:
+            from generators.flip_generator import FlipGenerator
+            self.flip_generator = FlipGenerator(
+                                input_structure=self.base_structures,
+                                params=DEFAULT_FLIP_PARAMS.copy(),
+                                check_physical=self.check_physical,
+                                check_physical_kwargs=self.check_physical_kwargs)
+            self.generators[OperationType.FLIP] = self.flip_generator
+
+        if OperationType.FUNCTIONAL_TO_CH in self.operation_sequence:
             from generators.functional_to_ch_generator import FunctionalToChGenerator
             self.functional_to_ch_generator = FunctionalToChGenerator(
-                                base_structures=self.base_structures,
+                                input_structure=self.base_structures,
                                 check_physical=self.check_physical,
                                 check_physical_kwargs=self.check_physical_kwargs)
-            self.generators.update({OperationType.FUNCTIONAL_TO_CH: self.functional_to_ch_generator})
+            self.generators[OperationType.FUNCTIONAL_TO_CH] = self.functional_to_ch_generator
 
-        if "ch_to_methyl" in self.operation_sequence:
+        if OperationType.CH_TO_METHYL in self.operation_sequence:
             from generators.ch_to_methyl_generator import ChToMethylGenerator
             self.ch_to_methyl_generator = ChToMethylGenerator(
-                                base_structures=self.base_structures,
+                                input_structure=self.base_structures,
                                 check_physical=self.check_physical,
                                 check_physical_kwargs=self.check_physical_kwargs)
-            self.generators.update({OperationType.CH_TO_METHYL: self.ch_to_methyl_generator})
+            self.generators[OperationType.CH_TO_METHYL] = self.ch_to_methyl_generator
         # Map operation types to generator instances
 
         # Configure the specific parameters for each generator
@@ -306,6 +312,8 @@ class BasinHoppingGenerator(BaseGenerator):
 
             # Skip if optimization failed
             if optimized_structure is None or not is_valid_energy:
+                #print(f"optimized_structure {optimized_structure}")
+                #print(f"is_valid_energy {is_valid_energy}")
                 logger.warning(f"Step {step}: Optimization failed")
                 self.stats["optimization_failures"] += 1
                 continue
@@ -458,7 +466,7 @@ class BasinHoppingGenerator(BaseGenerator):
             #}
             
             # Call the optimizer
-            print(f"optimize_params: {self.optimize_params}")
+            #print(f"optimize_params: {self.optimize_params}")
             optimized_structure, energy, trajectory_path = self.optimizer.optimize(
                 structure, **self.optimize_params)
             
@@ -517,7 +525,12 @@ class BasinHoppingGenerator(BaseGenerator):
         
         # First component: random base structure index
         base_idx = random.randint(0, len(self.base_structures) - 1)
-        seed_idx = random.randint(0, len(self.seed_structures) - 1)
+
+        if self.seed_structures:
+            seed_idx = random.randint(0, len(self.seed_structures) - 1)
+        else:
+            seed_idx = 0
+
         grid_point.extend([base_idx, seed_idx])
         
         # Add grid point components for each operation in the sequence
@@ -559,14 +572,17 @@ class BasinHoppingGenerator(BaseGenerator):
                 logger.error(f"Invalid base_idx {base_idx} (max: {len(self.base_structures)-1})")
                 return None
 
-            if seed_idx >= len(self.seed_structures):
+            if self.seed_structures  and seed_idx >= len(self.seed_structures):
                 logger.error(f"Invalid seed index {seed_idx} (max: {len(self.seed_structures)-1})")
                 
             base_structure_path = self.base_structures[base_idx]
             structure = self._load_structure(base_structure_path)
 
-            seed_structure_path = self.seed_structures[seed_idx]
-            
+            if self.seed_structures:
+                seed_structure_path = self.seed_structures[seed_idx]
+            else:
+                seed_structure_path = None
+   
             if not structure:
                 logger.error(f"Failed to load base structure: {base_structure_path}")
                 return None
@@ -581,7 +597,8 @@ class BasinHoppingGenerator(BaseGenerator):
                     grid_idx += 1
                     
                     flip_angle = self.flip_angles[flip_angle_idx]
-                    structure = self._get_specific_flipped_structure(structure, flip_angle)
+                    self.flip_generator.set_input_structure(structure)
+                    structure = self._get_specific_flipped_structure(flip_angle)
                     
                     if not structure:
                         logger.warning(f"Failed to generate flipped structure with angle {flip_angle}")
@@ -612,10 +629,13 @@ class BasinHoppingGenerator(BaseGenerator):
 
                 elif op_type == OperationType.FUNCTIONAL_TO_CH:
                     grid_idx += 1
-                    structure = self._get_specific_functional_to_ch(structure)
+                    self.functional_to_ch_generator.set_input_structure(structure)
+                    structure = self._get_specific_functional_to_ch()
                 elif op_type == OperationType.CH_TO_METHYL:
                     grid_idx += 1
-                    structure = self._get_specific_ch_to_methyl(structure)
+                    #print(structure)
+                    self.ch_to_methyl_generator.set_input_structure(structure)
+                    structure = self._get_specific_ch_to_methyl()
             
             # Add grid point to metadata
             structure.metadata['grid_point'] = grid_point
@@ -628,9 +648,9 @@ class BasinHoppingGenerator(BaseGenerator):
             logger.error(f"Error applying operations: {str(e)}", exc_info=True)
             return None
 
-    def _get_specific_flipped_structure(self, structure: MolecularStructure, flip_angle: float) -> Optional[MolecularStructure]:
+    def _get_specific_flipped_structure(self, flip_angle: float) -> Optional[MolecularStructure]:
         """Generate a structure with a specific flip angle."""
-        return self.flip_generator.generate_grid(structure, flip_angle)
+        return self.flip_generator.generate_grid(flip_angle)
 
     def _get_specific_attached_structure(self, structure: MolecularStructure, attach_angle: float, seed_structure: str) -> Optional[MolecularStructure]:
         """Generate a structure with a specific attach rotation angle."""
@@ -653,9 +673,13 @@ class BasinHoppingGenerator(BaseGenerator):
             return None
         return self.proton_generator.generate_grid(structure, self.proton_grid[proton_grid_idx])
 
-    def _get_specific_functional_to_ch(self, structure: MolecularStructure) -> Optional[MolecularStructure]:
+    def _get_specific_functional_to_ch(self) -> Optional[MolecularStructure]:
         """Generate a structure with a specific functional group to CH truncation"""
-        return self.functional_to_ch_generator.generate_grid
+        return self.functional_to_ch_generator.generate_grid()
+
+    def _get_specific_ch_to_methyl(self) -> Optional[MolecularStructure]:
+        """Generate a structure with a specific functional group to CH truncation"""
+        return self.ch_to_methyl_generator.generate_grid()
     
     def _load_structure(self, structure_path: str) -> Optional[MolecularStructure]:
         """Load a structure from file."""

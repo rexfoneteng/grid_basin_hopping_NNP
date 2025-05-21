@@ -19,31 +19,31 @@ class FlipGenerator(BaseGenerator):
     """Generator for flipping functional groups in structures with grid-based sampling."""
 
     def __init__(self,
-                 base_structures: Optional[List[str]] = None,
+                 input_structure: Optional[List[str]] = None,
                  params: Optional[Dict[str, Any]] = None,
                  check_physical: bool = True,
                  check_physical_kwargs: Optional[Dict[str, Any]] = None):
         """Initialize the FlipGenerator.
 
         Args:
-            base_structures: List of paths to base structure files
+            input_structure: List of paths to base structure files
             params: Parameters for flip operation
             check_physical: Whether to check if generated structures are physically reasonable
             check_physical_kwargs: Additional kwargs for physical geometry check
         """
         super().__init__(check_physical, check_physical_kwargs)
 
-        self.base_structures = base_structures or []
+        self.input_structure = input_structure or []
         self.params = params or DEFAULT_FLIP_PARAMS.copy()
-        self.current_base_structure = None
         
+        if isinstance(self.input_structure, str):
+            self.input_structure = self._load_structure()
         # Define the grid for rotation angles (in degrees)
-        self.angle_grid = [0, 120, 240]  # Default grid points
-        if "rotating_angle" in self.params and isinstance(self.params["rotating_angle"], (list, tuple)):
-            self.angle_grid = list(self.params["rotating_angle"])
-        
-        # Initialize grid state for basin hopping
-        self.current_grid_point = None
+        if "rotating_angle" in self.params:
+            if isinstance(self.params["rotating_angle"], (list, tuple)):
+                self.angle_grid = list(self.params["rotating_angle"])
+            elif isinstance(self.params["rotating_angle"], float):
+                self.angle_grid = [self.params["rotating_angle"]]       
 
     def __call__(self) -> MolecularStructure:
         """Generate a structure by flipping a functional group.
@@ -51,52 +51,25 @@ class FlipGenerator(BaseGenerator):
         Returns:
             A new MolecularStructure with flipped functional group
         """
-        if not self.base_structures:
+        if not self.input_structure:
             raise ValueError("No base structures available for flipping")
-            
-        # Select a random base structure if none is currently selected
-        if not self.current_base_structure:
-            self.current_base_structure = np.random.choice(self.base_structures)
-            
-        # Load the base structure
-        base_structure = self._load_structure(self.current_base_structure)
         
         # Generate variants and return a random one
-        variants = self.generate_variants(base_structure)
+        variants = self.generate_variants(self.input_structure)
         if variants:
             return np.random.choice(variants)
         else:
-            logger.warning(f"No valid variants generated for {self.current_base_structure}")
-            # Try a different base structure if this one failed
-            previous = self.current_base_structure
-            self.current_base_structure = np.random.choice([s for s in self.base_structures 
-                                                          if s != previous])
+            logger.warning(f"No valid variants generated")
             return self()
 
-    def _load_structure(self, structure_path: str) -> MolecularStructure:
-        """Load a structure from file.
-        
-        Args:
-            structure_path: Path to the structure file
-            
-        Returns:
-            Loaded molecular structure
-        """
-        # Implementation depends on your file loading utilities
-        # This is a placeholder
-        xyz_obj = Xyz(structure_path)
-        frame_id = np.random.randint(0, xyz_obj.frame_num)
-        current_frame = xyz_obj.get_frame(frame_id)
-        
+    def _load_structure(self) -> MolecularStructure:
+        """Load a structure from file."""
+        current_frame = xyz2list(self.input_structure)
         return MolecularStructure.from_xyz_list(current_frame)
 
-    def set_current_base_structure(self, structure_path: str):
-        """Set the current base structure."""
-        self.current_base_structure = structure_path
-
-    def set_base_structures(self, base_structures: List[str]):
+    def set_input_structure(self, input_structure: MolecularStructure):
         """Set the base structures."""
-        self.base_structures = base_structures
+        self.input_structure = input_structure
 
     def set_params(self, **kwargs):
         """Update parameters for the flip operation."""
@@ -104,29 +77,6 @@ class FlipGenerator(BaseGenerator):
         # Update angle grid if rotating_angle was changed
         if "rotating_angle" in kwargs and isinstance(kwargs["rotating_angle"], (list, tuple)):
             self.angle_grid = list(kwargs["rotating_angle"])
-
-    def set_grid_point(self, base_structure_idx: int, angle_idx: int):
-        """Set the specific grid point for basin hopping.
-        
-        Args:
-            base_structure_idx: Index of base structure in self.base_structures
-            angle_idx: Index of rotation angle in self.angle_grid
-        """
-        if 0 <= base_structure_idx < len(self.base_structures) and 0 <= angle_idx < len(self.angle_grid):
-            self.current_base_structure = self.base_structures[base_structure_idx]
-            self.current_grid_point = (base_structure_idx, angle_idx)
-        else:
-            raise ValueError(f"Invalid grid point: ({base_structure_idx}, {angle_idx})")
-
-    def get_random_grid_point(self) -> Tuple[int, int]:
-        """Get a random grid point.
-        
-        Returns:
-            Tuple of (base_structure_idx, angle_idx)
-        """
-        base_idx = np.random.randint(0, len(self.base_structures))
-        angle_idx = np.random.randint(0, len(self.angle_grid))
-        return (base_idx, angle_idx)
 
     def _find_proton(self, sugar, O_NAc_id) -> Set[int]:
         """Get the ID of H+."""
@@ -138,7 +88,7 @@ class FlipGenerator(BaseGenerator):
         proton_id = set(flatten_concatenation(ONAc_bond)).intersection(H_id)
         return proton_id
 
-    def generate_grid(self, structure, flip_angle):
+    def generate_grid(self, flip_angle) -> MolecularStructure:
         """
         Generate a structure with a specific flip angle.
         
@@ -148,10 +98,14 @@ class FlipGenerator(BaseGenerator):
             
         Returns:
             Flipped structure or None if generation failed
+
+        Notes:
+        generate_grid() is suppose to generate 1 grid with only angles
+        if self.angle_grid is a list, then the self.angle_grid is assigned as first item in the list by default
         """
         try:
             # Convert MolecularStructure to xyz list format
-            current_frame = structure.to_xyz_list()
+            current_frame = self.input_structure.to_xyz_list()
             
             # Get sugar statistics
             sug_stat = sugar_stat(current_frame,
@@ -201,6 +155,9 @@ class FlipGenerator(BaseGenerator):
             # Perform the flip
             flipped_xyz = flip(current_frame, CH_bond, C_flip_atom, CH_bond, flip_group)
             
+             # generate_grid() is suppose to generate 1 grid with only angles
+            if flip_angle == 0.0:
+                return flipped_xyz
             rotated_xyz = turn(flipped_xyz,
                              rotate_atom_list=flip_group,
                              rotate_bond=C_flip_atom,
@@ -208,10 +165,9 @@ class FlipGenerator(BaseGenerator):
             
             # Convert xyz_list to MolecularStructure obj
             flipped_structure = MolecularStructure.from_xyz_list(rotated_xyz)
-            flipped_structure.metadata = structure.metadata.copy() if structure.metadata else {}
+            flipped_structure.metadata = self.input_structure.metadata.copy() if self.input_structure.metadata else {}
             flipped_structure.metadata.update({
                 "operation": "flip",
-                "base_structure": structure.metadata.get('source_file', ''),
                 "ring_id": ring_id,
                 "position": position,
                 "angle_val": flip_angle
@@ -287,7 +243,6 @@ class FlipGenerator(BaseGenerator):
                 mol_structure = MolecularStructure.from_xyz_list(flipped_xyz)
                 mol_structure.metadata = {
                     "operation": "flip",
-                    "base_structure": self.current_base_structure,
                     "ring_id": ring_id,
                     "position": position,
                     "angle_val": 0.0
@@ -313,12 +268,9 @@ class FlipGenerator(BaseGenerator):
                     mol_structure = MolecularStructure.from_xyz_list(flipped_xyz_0)
                     mol_structure.metadata = {
                         "operation": "flip",
-                        "base_structure": self.current_base_structure,
                         "ring_id": ring_id,
                         "position": position,
-                        "angle_val": angle_val,
-                        "grid_point": (self.base_structures.index(self.current_base_structure), 
-                                     self.angle_grid.index(angle_val))
+                        "angle_val": angle_val
                     }
 
                     # Check if the structure is physically reasonable

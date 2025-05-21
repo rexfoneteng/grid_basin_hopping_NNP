@@ -4,7 +4,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-19 11:30:54
+# @Last modified time: 2025-05-20 10:57:41
 # @Description: Utility functions for basin hopping simulations.
 
 import os
@@ -37,7 +37,7 @@ def prepare_basin_hopping(config):
     operation_sequence = parse_operation_sequence(config["operations"])
 
     # Prepare optimizer parameters
-    optimizer_params = config['optimizer']['params']
+    optimizer_params = config['optimizer'].get('params', {})
     optimizer_type = config['optimizer']['type']
 
     accepted_xyz = os.path.join(output_dir, "accepted_structure.xyz")

@@ -4,7 +4,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-19 12:01:16
+# @Last modified time: 2025-05-20 10:58:44
 # @Description: Configuration utilities for basin hopping simulations.
 
 import os
@@ -264,7 +264,9 @@ def parse_operation_sequence(sequence_names):
     operation_map = {
         "flip": OperationType.FLIP,
         "attach_rotate": OperationType.ATTACH_ROTATE,
-        "add_proton": OperationType.ADD_PROTON
+        "add_proton": OperationType.ADD_PROTON,
+        "functional_to_ch": OperationType.FUNCTIONAL_TO_CH,
+        "ch_to_methyl": OperationType.CH_TO_METHYL
     }
 
     operations = []

@@ -4,7 +4,7 @@
 # @Date:   2025-05-19 14:08:42
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-20 10:09:17
+# @Last modified time: 2025-05-20 17:13:12
 # @Description: transforms any functional group into CH
 
 import numpy as np
@@ -30,7 +30,7 @@ class FunctionalToChGenerator(BaseGenerator):
     def __init__(self,
                  input_structure: Union[str, List, MolecularStructure, None] = None,
                  params: Optional[Dict[str, Any]] = \
-                    {"c_c": [9, 11]},
+                    {"c_c": [50, 9]},
                  check_physical: bool = True,
                  check_physical_kwargs: Optional[Dict[str, Any]] = None):
         """Initialize the FunctionalToChGenerator.
@@ -67,9 +67,9 @@ class FunctionalToChGenerator(BaseGenerator):
             logger.warning(f"No valid variants generated")
             return self()
 
-    def _load_structure(self, structure_path: str) -> MolecularStructure:
+    def _load_structure(self) -> MolecularStructure:
         """Load a structure from file."""
-        current_frame = xyz2list(structure_path)
+        current_frame = xyz2list(self.input_structure)
         return MolecularStructure.from_xyz_list(current_frame)
 
     def generate_variants(self) -> List[MolecularStructure]:
@@ -92,7 +92,7 @@ class FunctionalToChGenerator(BaseGenerator):
             try:
                 c1_idx, c2_idx = self.params["c_c"]
                 if atom_types[c1_idx] != 'C' or atom_types[c2_idx] != 'C':
-                    logger.warning(f"Atom at index {c_idx} is not a carbon atom")
+                    logger.warning(f"Atom at index {c1_idx} or {c2_idx} is not a carbon atom")
                     return []
             except Exception as e:
                 logger.error(f"Failed to retrieve the C index: {str(e)}")
@@ -151,7 +151,7 @@ class FunctionalToChGenerator(BaseGenerator):
             c1c2_unit_vec = c1c2_vec / np.linalg.norm(c1c2_vec)
             
             # Position new H opposite to attachment direction
-            new_h_coords = c1c2_unit_vec * 0.97 + c1_coords
+            new_h_coords = c1c2_unit_vec * 1.1 + c1_coords
             
             # Create new structure
             new_xyz_list = [xyz for i, xyz in enumerate(xyz_list) if i not in atoms_to_remove]
@@ -159,7 +159,7 @@ class FunctionalToChGenerator(BaseGenerator):
             
             # Create new MolecularStructure
             variant = MolecularStructure.from_xyz_list(new_xyz_list)
-            variant.metadata = structure.metadata.copy() if structure.metadata else {}
+            variant.metadata = self.input_structure.metadata.copy() if self.input_structure.metadata else {}
             variant.metadata.update({"operation": "ch2oh_to_ch"})
             
             # Check if physically reasonable
@@ -196,7 +196,7 @@ class FunctionalToChGenerator(BaseGenerator):
             logger.error(f"Error generating structure with specific indices: {str(e)}", exc_info=True)
             return None
 
-    def set_input_structure(self, input_structure: List[str]):
+    def set_input_structure(self, input_structure: Union[List, str, MolecularStructure]):
         """Set the base structures."""
         self.input_structure = input_structure
 

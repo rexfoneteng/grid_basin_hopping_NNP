@@ -4,7 +4,7 @@
 # @Date:   2025-05-19 14:10:12
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-20 10:10:17
+# @Last modified time: 2025-05-20 17:13:23
 # @Description: transforms CH to CH3 group
 
 import numpy as np
@@ -16,7 +16,8 @@ from generators.base_generator import BaseGenerator
 from core.molecular_structure import MolecularStructure
 
 from xyz_physical_geometry_tool_mod import is_physical_geometry
-from xyz_tools import Xyz
+from xyz_tools import Xyz, attach, xyz2list
+from molecular_attachment import attach_fragment
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,9 @@ class ChToMethylGenerator(BaseGenerator):
             logger.warning(f"No valid variants generated")
             return self()
 
-    def _load_structure(self, structure_path: str) -> MolecularStructure:
+    def _load_structure(self) -> MolecularStructure:
         """Load a structure from file."""
-        current_frame = xyz2list(structure_path)
+        current_frame = xyz2list(self.input_structure)
         return MolecularStructure.from_xyz_list(current_frame)
 
     def generate_variants(self) -> List[MolecularStructure]:
@@ -93,6 +94,9 @@ class ChToMethylGenerator(BaseGenerator):
                           ('H', -3.362085, 3.130344, -1.182454),
                           ('H', -4.681806, 2.601987, -0.126612),
                           ('H', -3.205821, 3.320289, 0.574525)]
+
+            #C_CH3_list = xyz2list("/beegfs/coldpool/htphan/fragment/methyl/methyl.xyz")
+
 
             # Get atom coordinates and types
             atom_coordinates = self.input_structure.coordinates
@@ -125,9 +129,10 @@ class ChToMethylGenerator(BaseGenerator):
                 return []
 
             base_align_list = [[c_idx, h_idx]]
-            attached = attach(xyz_list, seed_xyz_list=C_CH3_list, 
+            #print(f"base_align_list\n {base_align_list}")
+            attached = attach_fragment(xyz_list, seed_xyz_list=C_CH3_list, 
                               base_align_list=base_align_list,
-                              base_del_list=base_align_list,
+                              base_del_list=base_align_list[0],
                               **self.params["attach_kwargs"])
             
             # Create new MolecularStructure
@@ -137,7 +142,7 @@ class ChToMethylGenerator(BaseGenerator):
             
             # Check if physically reasonable
             if self.check_physical:
-                check_result = is_physical_geometry(new_xyz_list, **self.check_physical_kwargs)
+                check_result = is_physical_geometry(attached, **self.check_physical_kwargs)
                 if check_result != "normal":
                     logger.debug(f"Generated structure is not physically reasonable")
                     return []

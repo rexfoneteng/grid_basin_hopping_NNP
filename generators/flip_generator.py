@@ -1,6 +1,7 @@
 import numpy as np
 import logging
 from typing import List, Dict, Any, Tuple, Optional, Set, Union
+import copy
 
 from generators.base_generator import BaseGenerator
 from core.molecular_structure import MolecularStructure
@@ -39,11 +40,8 @@ class FlipGenerator(BaseGenerator):
         if isinstance(self.input_structure, str):
             self.input_structure = self._load_structure()
         # Define the grid for rotation angles (in degrees)
-        if "rotating_angle" in self.params:
-            if isinstance(self.params["rotating_angle"], (list, tuple)):
-                self.angle_grid = list(self.params["rotating_angle"])
-            elif isinstance(self.params["rotating_angle"], float):
-                self.angle_grid = [self.params["rotating_angle"]]       
+        if isinstance(self.params["rotating_angle"], float):
+            self.params["rotating_angle"] = [self.params["rotating_angle"]]       
 
     def __call__(self) -> MolecularStructure:
         """Generate a structure by flipping a functional group.
@@ -75,8 +73,6 @@ class FlipGenerator(BaseGenerator):
         """Update parameters for the flip operation."""
         self.params.update(kwargs)
         # Update angle grid if rotating_angle was changed
-        if "rotating_angle" in kwargs and isinstance(kwargs["rotating_angle"], (list, tuple)):
-            self.angle_grid = list(kwargs["rotating_angle"])
 
     def _find_proton(self, sugar, O_NAc_id) -> Set[int]:
         """Get the ID of H+."""
@@ -101,7 +97,7 @@ class FlipGenerator(BaseGenerator):
 
         Notes:
         generate_grid() is suppose to generate 1 grid with only angles
-        if self.angle_grid is a list, then the self.angle_grid is assigned as first item in the list by default
+        if self.w is a list, then the self.angle_grid is assigned as first item in the list by default
         """
         try:
             # Convert MolecularStructure to xyz list format
@@ -138,8 +134,6 @@ class FlipGenerator(BaseGenerator):
                 # Assuming C_NH_CO_CHHH contains N-Acetyl group information
                 flip_group = sug_stat["C_NH_CO_CHHH"][0]
                 # Find proton ID if needed
-                from molecule_stat import molecule_stat
-                from utils.flatten import flatten_concatenation
                 
                 sugar_list = [s for s in current_frame]
                 mol_stat = molecule_stat(sugar_list)
@@ -156,12 +150,13 @@ class FlipGenerator(BaseGenerator):
             flipped_xyz = flip(current_frame, CH_bond, C_flip_atom, CH_bond, flip_group)
             
              # generate_grid() is suppose to generate 1 grid with only angles
-            if flip_angle == 0.0:
-                return flipped_xyz
-            rotated_xyz = turn(flipped_xyz,
-                             rotate_atom_list=flip_group,
-                             rotate_bond=C_flip_atom,
-                             angle=flip_angle)
+            if flip_angle != 0:
+                rotated_xyz = turn(flipped_xyz,
+                                   rotate_atom_list=flip_group,
+                                   rotate_bond=C_flip_atom,
+                                   angle=flip_angle)
+            else:
+                rotated_xyz = copy.deepcopy(flipped_xyz)
             
             # Convert xyz_list to MolecularStructure obj
             flipped_structure = MolecularStructure.from_xyz_list(rotated_xyz)
@@ -258,7 +253,7 @@ class FlipGenerator(BaseGenerator):
 
             # Rotate using the grid angles
             if self.params.get("rotate_after_flip", True):
-                for angle_val in self.angle_grid:
+                for angle_val in self.params["rotating_angle"]:
                     flipped_xyz_0 = turn(flipped_xyz,
                                         rotate_atom_list=flip_group,
                                         rotate_bond=C_flip_atom,

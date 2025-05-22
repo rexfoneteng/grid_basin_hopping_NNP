@@ -4,7 +4,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-19 11:04:33
+# @Last modified time: 2025-05-21 16:35:44
 # @Description: Basin Hopping - Structure Optimization with Neural Network Potentials
 
 import os
@@ -47,10 +47,16 @@ def parse_arguments():
     )
     
     parser.add_argument(
-        "--operations",
+        "--operation-sequence",
         nargs="+",
-        choices=["flip", "attach_rotate", "add_proton"],
+        choices=["flip", "attach_rotate", "add_proton", "functional_to_ch", "ch_to_methyl"],
         help="List of operations to perform in sequence"
+    )
+
+    parser.add_argument(
+        "--operation-params",
+        nargs="+",
+        help="List of parameters corespond the the operation-sequence"
     )
     
     parser.add_argument(
@@ -92,6 +98,12 @@ def parse_arguments():
         action="store_true",
         help="Save optimization trajectories"
     )
+
+    parser.add_argument(
+        "--skip-local-optimization",
+        action="store_true",
+        help="Skip local optimization"
+    )
     
     parser.add_argument(
         "--log-level",
@@ -118,29 +130,26 @@ def run_basin_hopping(config):
     """
     # Prepare parameters
     params = prepare_basin_hopping(config)
-
     try:
         logger.info("Initializing basin hopping generator...")
         bh_generator = BasinHoppingGenerator(
-            base_structures=config['base_structures'],
-            seed_structures=config['seed_structures'],
-            temperature=config['temperature'],
-            check_physical=params['physical_check']['enabled'],
-            check_physical_kwargs=params['physical_check']['params'],
-            optimizer_type=params['optimizer_type'],
-            optimizer_params=params['optimizer_params'],
-            optimize_params=params['optimize_params'],
-            accepted_xyz=params['accepted_xyz'],
-            rejected_xyz=params['rejected_xyz'],
-            max_rejected=config['max_rejected'],
-            operation_sequence=params['operation_sequence'],
-            save_trj=config['save_trajectories'],
-            trajectory_dir=params['trajectories_dir']
+            base_structures=config["base_structures"],
+            seed_structures=config["seed_structures"],
+            temperature=config["temperature"],
+            check_physical=params["physical_check"]["enabled"],
+            check_physical_kwargs=params["physical_check"]["params"],
+            optimizer_type=params["optimizer_type"],
+            optimizer_params=params["optimizer_params"],
+            optimize_params=params["optimize_params"],
+            accepted_xyz=params["accepted_xyz"],
+            rejected_xyz=params["rejected_xyz"],
+            max_rejected=config["max_rejected"],
+            operation_sequence=params["operation_sequence"],
+            operation_params=params["operation_params"],
+            save_trj=config["save_trajectories"],
+            trajectory_dir=params["trajectories_dir"],
+            skip_local_optimization=params["skip_local_optimization"]
         )
-
-        if params["flip_grid"]:
-            bh_generator.set_flip_angles(params["flip_grid"])
-            logger.info(f"Configured {len(params['flip_grid'])} flip grid points")
 
         if params["attach_rotate_grid"]:
             bh_generator.set_attach_params(params["attach_rotate_grid"])
@@ -153,11 +162,12 @@ def run_basin_hopping(config):
 
         # Run basin hopping
         logger.info(f"Starting basin hopping with {config['steps']} steps...")
-        best_structure = bh_generator(n_steps=config['steps'])
+        best_structure = bh_generator(n_steps=config["steps"])
 
         # Save results
-        save_results(params["stats_file"], bh_generator.get_stats(),
-                     bh_generator.best_energy, params["accepted_xyz"])
+        if not params["skip_local_optimization"]:
+            save_results(params["stats_file"], bh_generator.get_stats(),
+                         bh_generator.best_energy, params["accepted_xyz"])
 
         return 0
 

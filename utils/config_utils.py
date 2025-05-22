@@ -4,7 +4,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-20 10:58:44
+# @Last modified time: 2025-05-21 16:18:07
 # @Description: Configuration utilities for basin hopping simulations.
 
 import os
@@ -36,7 +36,8 @@ def load_config(config_path=None):
         "max_rejected": 50,
         "save_trajectories": False,
         "steps": 100,
-        "operations": ["flip", "attach_rotate", "add_proton"],
+        "operation_sequence": ["flip", "attach_rotate", "add_proton"],
+        "operation_params": [{}, {}, {}],
         "optimizer": {"type": "nnp_gauss"},  # Options: "nnp", "gamess"
         "optimization": {
             "fmax": 5e-3,
@@ -78,6 +79,7 @@ def load_config(config_path=None):
             [37, -120, "OCH"],
             [37, 120, "OCH"]
         ],
+        "skip_local_optimization": False,
         "logging": {
             "level": "INFO",
             "file": "basin_hopping.log"
@@ -139,8 +141,11 @@ def merge_cli_with_config(args, config):
     if hasattr(args, "seed_structures") and args.seed_structures:
         config["seed_structures"] = args.seed_structures
     
-    if hasattr(args, "operations") and args.operations:
-        config["operations"] = args.operations
+    if hasattr(args, "operation_sequence") and args.operation_sequence:
+        config["operation_sequence"] = args.operation_sequence
+
+    if hasattr(args, "operation_params") and args.operation_params:
+        config["operation_params"] = args.operation_params
     
     if hasattr(args, "temperature") and args.temperature:
         config["temperature"] = args.temperature
@@ -162,6 +167,9 @@ def merge_cli_with_config(args, config):
     
     if hasattr(args, "save_trajectories") and args.save_trajectories:
         config["save_trajectories"] = args.save_trajectories
+
+    if hasattr(args, "skip_local_optimization") and args.skip_local_optimization:
+        config["skip_local_optimization"] = args.skip_local_optimization
     
     if hasattr(args, "log_level") and args.log_level:
         config["logging"]["level"] = args.log_level
@@ -192,7 +200,7 @@ def validate_config(config):
         errors.append("No base structures specified")
     
     # Check for seed structure if needed
-    if "attach_rotate" in config["operations"]:
+    if "attach_rotate" in config["operation_sequence"]:
         if not config["seed_structures"]:
             errors.append("Seed structure required for attach_rotate operation")
         #elif not os.path.exists(config["seed_structures"]):
@@ -228,7 +236,7 @@ def validate_config(config):
             errors.append("GAMESS optimizer requires 'basis_set' parameter")
 
     try:
-        parse_operation_sequence(config["operations"])
+        parse_operation_sequence(config["operation_sequence"])
     except ValueError as e:
         errors.append(str(e))
 

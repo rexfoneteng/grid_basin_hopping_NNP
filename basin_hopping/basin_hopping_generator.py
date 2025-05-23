@@ -4,7 +4,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-21 17:04:32
+# @Last modified time: 2025-05-22 17:44:10
 # @Description: Basin Hopping Engine
 
 import numpy as np
@@ -290,7 +290,11 @@ class BasinHoppingGenerator(BaseGenerator):
             with open("./input.xyz", "a") as f:
                 f.write(proposed_structure.to_xyz_str(info=f"Step= {step}"))
 
-            if not self.skip_local_optimization:
+            if self.skip_local_optimization:
+                step += 1
+                if step >= n_steps:
+                    return None
+            else:
                 # Optimize the proposed structure
                 optimized_structure, optimized_energy, trajectory_path = self._optimize_structure(proposed_structure)
             
@@ -367,11 +371,7 @@ class BasinHoppingGenerator(BaseGenerator):
                 logger.info(f"Best energy found: {self.best_energy:.6f}")
                 logger.info(f"Accepted/rejected moves: {self.total_accepted}/{self.total_rejected}")
                 
-                return self.best_structure
-            else: # When user simply want to generate the initial guesses
-                step += 1
-                if step >= n_steps:
-                    return 0
+        return self.best_structure
     
     def _reset_stats(self):
         """Reset statistics for a new run."""
@@ -431,11 +431,12 @@ class BasinHoppingGenerator(BaseGenerator):
         self.best_energy = optimized_energy
         
         # Append initial structure to output file
-        self._append_to_output_file(optimized_structure, optimized_energy, -1, True)
+        if optimized_structure:
+            self._append_to_output_file(optimized_structure, optimized_energy, -1, True)
         
         logger.info(f"Initialized basin hopping at grid point {grid_point} with energy {self.current_energy:.6f}")
     
-    def _optimize_structure(self, structure):
+    def _optimize_structure(self, structure: MolecularStructure):
         """Optimize a structure using the configured optimizer.
         
         Args:
@@ -770,7 +771,9 @@ class BasinHoppingGenerator(BaseGenerator):
         }
         
         grid_idx = 2
-        for op_idx, op_type in enumerate(self.operation_sequence):
+
+        for op_idx, (op_type, op_params) in \
+                enumerate(zip(self.operation_sequence, self.operation_params)):
             if op_type == OperationType.FLIP:
                 flip_angle_idx = grid_point[grid_idx]
                 grid_idx += 1

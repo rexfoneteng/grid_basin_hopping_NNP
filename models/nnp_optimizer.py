@@ -3,7 +3,7 @@
 # @Date:   2025-04-17 16:34:44
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-19 12:06:30
+# @Last modified time: 2025-05-22 17:11:39
 # @Description: Neural Network Potential optimizer implementation.
 
 import os
@@ -20,6 +20,7 @@ from models.optimizer_interface import StructureOptimizer
 from custom_interface import CustomInterface
 from interfaces.gaussian_tools import gaussian_job
 
+from xyz_tools import Xyz
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,6 @@ class NNPOptimizer(StructureOptimizer):
             **kwargs: Additional parameters:
                 - fmax: Maximum force criterion for convergence (eV/Å)
                 - steps: Maximum number of steps
-                - save_trajectory: Whether to save the trajectory
                 - trajectory_dir: Directory to save trajectory in
             
         Returns:
@@ -80,8 +80,7 @@ class NNPOptimizer(StructureOptimizer):
         # Get optimization parameters
         fmax = kwargs.get("fmax", self.params.get("fmax", 5e-3))
         steps = kwargs.get("steps", self.params.get("steps", 1000))
-        save_trajectory = kwargs.get("save_trajectory", False)
-        trajectory_dir = kwargs.get("trajectory_dir", "trajectories")
+        trajectory_dir = kwargs.get("trajectory_dir")
 
         try:
             # Create a temporary directory for the optimization
@@ -135,7 +134,7 @@ class NNPOptimizer(StructureOptimizer):
                 energy = local_min_at.get_potential_energy() * eV_TO_Ha_conversion
 
                 saved_trajectory_path = None
-                if save_trajectory:
+                if trajectory_dir:
                     # Save trajectory if requested
                     if not os.path.exists(trajectory_dir):
                         os.makedirs(trajectory_dir, exist_ok=True)
@@ -147,13 +146,30 @@ class NNPOptimizer(StructureOptimizer):
                     saved_trajectory_path = os.path.join(trajectory_dir, trajectory_file_name)
                     
                     # Save the trajectory file
-                    self._save_trajectory(structure, opt_traj, saved_trajectory_path)
+                    self._write_traj(opt_traj, saved_trajectory_path)
 
             return optimized_structure, energy, saved_trajectory_path
 
         except Exception as e:
             logger.error(f"Error in structure optimization: {str(e)}", exc_info=True)
             return None, float('inf'), None
+
+    def _write_traj(self, opt_traj: str, saved_trajectory_path: str):
+        """Write optimization trajectory in XYZ format"""
+        with open(saved_trajectory_path, "a") as f:
+            for snapshot in opt_traj:
+                energy = snapshot.get_potential_energy() * eV_TO_Ha_conversion
+                forces = snapshot.get_forces() * eV_TO_Ha_conversion
+                snapshot.info.update({"eng": energy})
+                snapshot_structure = MolecularStructure.from_ase_atoms(snapshot, include_force=True)
+                snapshot_structure.set_forces(forces)
+                xyz_str = snapshot_structure.to_xyz_str(include_forces=True)
+                lines = xyz_str.strip().split("\n")
+                lines[1] = f"eng= {energy} Properties=species:S:1:pos:R:3:force:R:3"
+                xyz_str = "\n".join(lines)
+                f.write(xyz_str + "\n")
+        logger.info(f"Saved trajectory file to {saved_trajectory_path}")
+        return saved_trajectory_path
 
     def get_name(self) -> str:
         """
@@ -183,16 +199,6 @@ class NNPGaussOptimizer(StructureOptimizer):
         
         Args:
             params: Dictionary containing:
-                - state_dict: Computational method (e.g., 'B3LYP', 'MP2')
-                - basis_set: Basis set (e.g., '6-31G(d)')
-                - charge: Molecular charge
-                - multiplicity: Spin multiplicity
-                - memory: Memory in MW
-                - ncpus: Number of CPU cores
-                - additional_keywords: Additional GAMESS keywords
-                - parm_loc: path of parameters
-                - gamess_loc: path of GAMESS
-                - preserve_inp: Preserve inp
         """
 
         self.params = params.copy()
@@ -225,6 +231,8 @@ class NNPGaussOptimizer(StructureOptimizer):
         elif not self.model.endswith("best_model"):
             raise NotImplementedError("Current implementatation only support 'best_model' only")
 
+        trajectory_dir = kwargs.get("trajectory_dir")
+
         opt_pref = {"convert_to_xyz": convert_to_xyz,
                     "convert_frame_list": convert_frame_list,
                     "header": self.params["header_template"].format(self.model),
@@ -248,15 +256,42 @@ class NNPGaussOptimizer(StructureOptimizer):
                     "optimized": True,
                     "optimize_params": {"algorithm": "Gaussian Berny"}
                 })
+
             saved_trajectory_path = None
-            #if self.save_trj:
-            #    logger.error("Save trajectory is not implemented")
+            if trajectory_dir:
+                #print(f"trajectory_dir: {trajectory_dir}")
+                # Save trajectory if requested
+                if not os.path.exists(trajectory_dir):
+                    os.makedirs(trajectory_dir, exist_ok=True)
+                    
+                    # Generate a filename based on structure metadata
+                grid_point = structure.metadata.get("grid_point", "unknown")
+                grid_point_str = "-".join(map(str, grid_point)) if isinstance(grid_point, tuple) else str(grid_point)
+                trajectory_file_name = f"grid_{grid_point_str}.xyz"
+                saved_trajectory_path = os.path.join(trajectory_dir, trajectory_file_name)
+                    
+                # Save the trajectory file
+                self._write_traj(results, saved_trajectory_path)
 
             return optimized_structure, energy, saved_trajectory_path
 
         except Exception as e:
             logger.error(f"Error in structure optimization: {str(e)}", exc_info=True)
-            return None, float('inf'), "none"
+            return None, float('inf'), None
+
+    def _write_traj(self, opt_results: Dict, saved_trajectory_path: str):
+        """Write optimization trajectory in XYZ format"""
+        try:
+            with Xyz(saved_trajectory_path, "w") as xyz_obj:
+                for frame_id, (coord, eng) \
+                    in enumerate(zip(opt_results["xyz_list"], opt_results["eng"])):
+                    xyz_info = f"frame={frame_id} eng={eng}"
+                    xyz_obj.write(coord, xyz_info)
+
+            return saved_trajectory_path
+        except Exception as e:
+            logger.error(f"Error in writing trajectory: {str(e)}")
+            return None
 
     def get_name(self) -> str:
         """

@@ -4,7 +4,7 @@
 # @Date:   2025-05-19 14:10:12
 # @Email:  phanhuutrong93@gmail.com
 # @Last modified by:   vanan
-# @Last modified time: 2025-05-20 17:13:23
+# @Last modified time: 2025-05-22 14:05:08
 # @Description: transforms CH to CH3 group
 
 import numpy as np
@@ -94,9 +94,6 @@ class ChToMethylGenerator(BaseGenerator):
                           ('H', -3.362085, 3.130344, -1.182454),
                           ('H', -4.681806, 2.601987, -0.126612),
                           ('H', -3.205821, 3.320289, 0.574525)]
-
-            #C_CH3_list = xyz2list("/beegfs/coldpool/htphan/fragment/methyl/methyl.xyz")
-
 
             # Get atom coordinates and types
             atom_coordinates = self.input_structure.coordinates
